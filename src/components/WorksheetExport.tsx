@@ -2,7 +2,7 @@
  * @license
  * SPDX-License-Identifier: Apache-2.0
  */
-
+import { normalizeOptions } from "../utils/helpers";
 import React, { useState } from "react";
 import { Copy, Printer, FileText, CheckSquare, Eye, ArrowLeft, Download, FileSpreadsheet } from "lucide-react";
 import { GeneratedExamSuite } from "../types";
@@ -106,7 +106,7 @@ export default function WorksheetExport({ suite, onBack }: WorksheetExportProps)
       md += `#### Part III Solution:\n`;
       md += `Blanks (1) through (10) Answers:\n`;
       suite.blankMatchingSuite.answers.forEach((ans, idx) => {
-        md += `(${idx + 1}): ${ans}  (Word: ${suite.blankMatchingSuite!.options.find(o => o.startsWith(`(${ans})`)) || ans})\n`;
+        md += `(${idx + 1}): ${ans}  (Word: ${normalizeOptions(suite.blankMatchingSuite!.options).find(o => o.startsWith(`(${ans})`)) || ans})\n`;
         if (includeExplanations) {
           md += `     解析: ${suite.blankMatchingSuite!.explanations[idx]}\n`;
         }
