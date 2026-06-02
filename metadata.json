@@ -1,0 +1,6 @@
+{
+  "name": "GSAT English Mock Paper Creator",
+  "description": "GSAT English Mock Paper Creator 學測英文模考創建器 designed by Tr. Shirley Du. An professional, artistic online suite for generating high-fidelity mock exam sheets customized to Taiwan scholastic standards.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
