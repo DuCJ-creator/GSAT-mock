@@ -13,3 +13,12 @@ export function normalizeOptions(options: any): string[] {
   }
   return [];
 }
+
+/**
+ * Normalizes a correctAnswer field that may come back as "(A)" or "A".
+ * Always returns a bare uppercase letter: "A", "B", "C", etc.
+ */
+export function normalizeAnswer(answer: any): string {
+  if (typeof answer !== "string") return "";
+  return answer.replace(/[()]/g, "").trim().toUpperCase();
+}
