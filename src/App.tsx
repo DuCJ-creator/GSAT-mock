@@ -2,7 +2,7 @@
  * @license
  * SPDX-License-Identifier: Apache-2.0
  */
-
+import { normalizeOptions } from "./utils/helpers";
 import React, { useState, useEffect, useRef } from "react";
 import { 
   Plus, 
@@ -1106,7 +1106,7 @@ export default function App() {
                             <div className="grid grid-cols-1 md:grid-cols-4 gap-2.5 mt-4">
                               {["A", "B", "C", "D"].map((letter) => {
                                 // Match the option string
-                                const optString = q.options.find(o => o.startsWith(`(${letter})`)) || `(${letter})`;
+                                const optString = normalizeOptions(q.options).find(o => o.startsWith(`(${letter})`)) || `(${letter})`;
                                 const isSelected = userSelectedChoice === letter;
                                 return (
                                   <button
@@ -1163,7 +1163,7 @@ export default function App() {
                             <span className="text-xs font-bold font-mono text-amber-850">Gaps ({q.gapNumber}) Selector</span>
                             <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
                               {["A", "B", "C", "D"].map((letter) => {
-                                const optString = q.options.find(o => o.startsWith(`(${letter})`)) || `(${letter})`;
+                                const optString = normalizeOptions(q.options).find(o => o.startsWith(`(${letter})`)) || `(${letter})`;
                                 const isSelected = userSel === letter;
                                 return (
                                   <button
@@ -1265,7 +1265,7 @@ export default function App() {
                             >
                               <option value="">-- Choose Option --</option>
                               {["A", "B", "C", "D", "E", "F", "G", "H", "I", "J"].map((letter) => {
-                                const fullOptStr = examSuite.blankMatchingSuite!.options.find(o => o.startsWith(`(${letter})`)) || `(${letter})`;
+                                const fullOptStr = normalizeOptions(examSuite.blankMatchingSuite!.options).find(o => o.startsWith(`(${letter})`)) || `(${letter})`;
                                 return (
                                   <option key={letter} value={letter}>
                                     {fullOptStr}
@@ -1319,7 +1319,7 @@ export default function App() {
                                 {/* Multiple choice options rendered in a single list on separate lines */}
                                 <div className="flex flex-col gap-2 mt-3 pl-1">
                                   {["A", "B", "C", "D"].map((letter) => {
-                                    const optStr = q.options.find(o => o.startsWith(`(${letter})`)) || `(${letter})`;
+                                    const optStr = normalizeOptions(q.options).find(o => o.startsWith(`(${letter})`)) || `(${letter})`;
                                     const isSelected = userAns === letter;
                                     return (
                                       <button
