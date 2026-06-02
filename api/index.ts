@@ -55,34 +55,64 @@ app.post("/api/generate", async (req, res) => {
     if (selectedExerciseTypes.vocab) {
       activeSections.push("vocabQuestions");
       sectionsGuidelines += `
-1. "vocabQuestions": Create 10 GSAT-level English vocabulary multiple-choice questions focusing on the provided vocabulary words or suitable GSAT academic words (if not enough vocab).
-   - Ensure the structure and complexity are aligned with Taiwan's GSAT.
-   - The correct answers MUST be evenly distributed among the options (A), (B), (C), (D).
-   - For EACH question, provide exactly four choices prefixed (A), (B), (C), (D).
-   - Distractors must be standard high-frequency academic vocabulary.
-   - Provide a detailed Traditional Chinese explanation containing translation and grammar notes.
+1. "vocabQuestions": Create 10 GSAT-level English vocabulary multiple-choice questions.
+
+   STRICT FORMAT RULES (模仿真實學測格式):
+   - The "question" field MUST be a complete English sentence containing exactly one blank written as "______" (six underscores).
+     Example: "The mayor has such a ______ schedule that it takes weeks to arrange an interview with her."
+   - The "options" field MUST be an array of exactly 4 strings, each a single vocabulary word (no phrases), formatted as:
+     ["(A) hasty", "(B) tight", "(C) diligent", "(D) routine"]
+   - The "correctAnswer" field MUST be exactly one letter: "A", "B", "C", or "D" — no parentheses, no extra text.
+   - The "wordTested" field is the correct answer word itself (e.g. "tight").
+   - Correct answers MUST be evenly distributed: roughly 2-3 questions each for A, B, C, D.
+   - Distractors must be plausible GSAT-level single-word vocabulary that fits grammatically but not semantically.
+   - The "explanation" field: detailed Traditional Chinese explanation of why the correct word fits and why the others do not.
+   - Focus questions on the provided vocabulary words. Use standard GSAT Level 3-6 words if more are needed.
 `;
     }
 
     if (selectedExerciseTypes.cloze) {
       activeSections.push("clozeSuite");
       sectionsGuidelines += `
-2. "clozeSuite": Create 1 GSAT-level English cloze passage (綜合測驗) of 150-180 words, containing exactly 5 numbered blanks: (1) to (5).
-   - The blanks must test vocabulary, grammar, collocations, connectives, or idioms.
-   - Each blank must have exactly four multiple-choice options.
-   - Correct answers must not cluster on a single option character.
-   - Provide detailed Traditional Chinese explanation for each gap.
+2. "clozeSuite": Create 1 authentic GSAT-style cloze passage (綜合測驗).
+
+   STRICT FORMAT RULES (模仿真實學測格式):
+   - The "passage" field: a natural, engaging English passage of 150-180 words.
+     Blanks MUST appear inline as "__ 11 __", "__ 12 __", "__ 13 __", "__ 14 __", "__ 15 __" (numbered 11-15, with spaces and underscores around the number).
+     Example passage excerpt: "White rhinoceroses, __ 11 __, do the same thing—only their choice of meeting place is a giant pile of poop."
+   - The passage must feel like a real article (science, culture, psychology, history, nature — NOT a textbook exercise).
+   - Exactly 5 blanks numbered 11 through 15 inline in the passage.
+   - The "questions" array: exactly 5 items, one per blank.
+     - "gapNumber": the integer (11, 12, 13, 14, or 15).
+     - "options": array of exactly 4 strings. Options MAY be phrases (not just single words), formatted as:
+       ["(A) what is more", "(B) it turns out", "(C) in other words", "(D) all in all"]
+       OR single words: ["(A) demonstrate", "(B) immigrate", "(C) communicate", "(D) manipulate"]
+     - "correctAnswer": exactly one letter "A", "B", "C", or "D" — no parentheses.
+     - "category": one of: vocabulary, grammar, collocation, idiom, discourse connector.
+     - "explanation": detailed Traditional Chinese explanation for why the correct option fits and why others do not.
+   - Correct answers must be balanced across A, B, C, D — do NOT cluster on one letter.
 `;
     }
 
     if (selectedExerciseTypes.blankMatching) {
       activeSections.push("blankMatchingSuite");
       sectionsGuidelines += `
-3. "blankMatchingSuite": Create 1 GSAT "文意選填" containing exactly 10 numbered blanks: (1) to (10).
-   - The passage should be around 200-250 words.
-   - Provide exactly 10 candidate words labeled (A) through (J).
-   - Each blank must have exactly ONE unique correct option.
-   - Provide a clean mapping of blanks 1-10 to letters and Traditional Chinese explanations.
+3. "blankMatchingSuite": Create 1 authentic GSAT-style blank matching passage (文意選填).
+
+   STRICT FORMAT RULES (模仿真實學測格式):
+   - The "passage" field: a natural, engaging English passage of 200-250 words.
+     Blanks MUST appear inline as "__ 21 __", "__ 22 __", ... "__ 30 __" (numbered 21-30, with spaces and underscores around the number).
+     Example: "Taking a nap in the middle of the day is by no means __ 21 __. In fact, you are giving your brain and your body some time to recharge."
+   - The passage must read like a real article — NOT a textbook exercise.
+   - Exactly 10 blanks numbered 21 through 30 inline in the passage.
+   - The "options" field: exactly 10 candidate strings labeled (A) through (J).
+     Mix of single words AND short phrases (2-3 words), formatted as:
+     ["(A) retain", "(B) depend on", "(C) atmosphere", "(D) delay", "(E) unproductive", "(F) risk", "(G) function", "(H) minimal", "(I) dramatic", "(J) point to"]
+     Make options deceptive: include pairs with similar grammar (e.g. two nouns, two verbs) to challenge students.
+   - The "answers" field: array of exactly 10 strings, each a single letter A-J, corresponding to blanks 21-30 in order.
+     Example: ["E", "G", "F", "J", "A", "B", "D", "I", "H", "C"]
+   - The "explanations" field: array of exactly 10 Traditional Chinese explanation strings, one per blank (21-30).
+   - Each blank must have exactly ONE correct answer. All 10 options must be used exactly once.
 `;
     }
 
@@ -90,31 +120,41 @@ app.post("/api/generate", async (req, res) => {
       activeSections.push("readingPassages");
       sectionsGuidelines += `
 4. "readingPassages": Create reading comprehension passages for levels: ${selectedReadingLevels.join(", ")}.
-   - For EACH level, create a distinct passage of 250-300 words with exactly 4 comprehension questions.
-   - Questions test global reading skills (main idea, detail, tone, inference, title).
-   - Correct answers must be distributed evenly. Provide 4 options per question.
-   - Provide complete Traditional Chinese explanations.
+
+   STRICT FORMAT RULES (模仿真實學測格式):
+   - For EACH requested level, create one distinct, high-quality passage of 250-300 words on an engaging topic.
+   - The passage must feel like a real article — NOT a textbook exercise.
+   - Each passage is followed by exactly 4 comprehension questions.
+   - Question types must vary: main idea, specific detail, vocabulary in context, inference, or title selection.
+   - The "options" field for each question: array of exactly 4 strings formatted as:
+     ["(A) option text here", "(B) option text here", "(C) option text here", "(D) option text here"]
+     Options may be full sentences or short phrases as appropriate.
+   - "correctAnswer": exactly one letter "A", "B", "C", or "D" — no parentheses.
+   - Correct answers must be balanced across A, B, C, D across all questions.
+   - "explanation": detailed Traditional Chinese explanation with key sentence translation and reasoning.
 `;
     }
 
-    const systemPrompt = `You are Tr. Shirley Du, an elite high school English educator in Taiwan specializing in GSAT (英語學測) exam preparation. 
-Your tone is encouraging, academically precise, and deeply knowledgeable about Taiwan's testing patterns.
-You will generate high-quality interactive exercises based on the vocabulary words provided.
-Ensure that:
-1. Every generated question has no ambiguity. There is exactly one correct answer.
-2. The vocabulary level fits the Taiwan GSAT syllabus (levels 3 to 6).
-3. The explanations are written in elegant Traditional Chinese (繁體中文) following the Taiwanese teaching style.
-4. Correct answers are balanced among choices (A, B, C, D) without clustering.`;
+    const systemPrompt = `You are Tr. Shirley Du, an elite high school English educator in Taiwan specializing in GSAT (英語學測) exam preparation.
+Your tone is encouraging, academically precise, and deeply knowledgeable about Taiwan's GSAT testing patterns and official format.
+You will generate high-quality exam exercises that precisely replicate the authentic GSAT format.
+Critical rules:
+1. Every question has exactly one unambiguous correct answer.
+2. Vocabulary fits Taiwan GSAT syllabus levels 3-6.
+3. All explanations are in elegant Traditional Chinese (繁體中文).
+4. Correct answers are balanced across A, B, C, D — never cluster more than 3 on the same letter.
+5. Passages read like real articles, not textbook exercises.
+6. "correctAnswer" fields contain ONLY a single letter: A, B, C, D, E, F, G, H, I, or J — never "(A)" with parentheses.`;
 
-    const instructionsPrompt = `Please generate the requested GSAT exam exercises based on the following input vocabulary:
+    const instructionsPrompt = `Please generate the requested GSAT exam exercises based on the following vocabulary:
 ${vocabString}
 
-Active Sections to generate: ${activeSections.join(", ")}.
+Active sections to generate: ${activeSections.join(", ")}.
 
-Guidelines for sections to generate:
+Detailed guidelines per section:
 ${sectionsGuidelines}
 
-You MUST follow the specified JSON schema strictly. Make sure all strings are correctly closed and the response is clean JSON.`;
+CRITICAL: Follow the JSON schema exactly. "correctAnswer" must always be a bare letter (e.g. "A" not "(A)"). All "options" arrays must be properly formed string arrays.`;
 
     const responseSchema: any = { type: Type.OBJECT, properties: {}, required: [] };
 
@@ -124,12 +164,16 @@ You MUST follow the specified JSON schema strictly. Make sure all strings are co
         items: {
           type: Type.OBJECT,
           properties: {
-            id: { type: Type.STRING },
-            question: { type: Type.STRING },
-            options: { type: Type.ARRAY, items: { type: Type.STRING } },
-            correctAnswer: { type: Type.STRING },
-            wordTested: { type: Type.STRING },
-            explanation: { type: Type.STRING }
+            id: { type: Type.STRING, description: "Unique question ID e.g. 'v1', 'v2'" },
+            question: { type: Type.STRING, description: "Full sentence with exactly one '______' blank" },
+            options: {
+              type: Type.ARRAY,
+              items: { type: Type.STRING },
+              description: "Exactly 4 single-word options: ['(A) word', '(B) word', '(C) word', '(D) word']"
+            },
+            correctAnswer: { type: Type.STRING, description: "Single letter only: A, B, C, or D" },
+            wordTested: { type: Type.STRING, description: "The correct answer word" },
+            explanation: { type: Type.STRING, description: "Traditional Chinese explanation" }
           },
           required: ["id", "question", "options", "correctAnswer", "wordTested", "explanation"]
         }
@@ -141,20 +185,27 @@ You MUST follow the specified JSON schema strictly. Make sure all strings are co
       responseSchema.properties.clozeSuite = {
         type: Type.OBJECT,
         properties: {
-          passage: { type: Type.STRING },
+          passage: {
+            type: Type.STRING,
+            description: "150-180 word passage with blanks written as '__ 11 __' through '__ 15 __' inline"
+          },
           questions: {
             type: Type.ARRAY,
+            description: "Exactly 5 items for gaps 11-15",
             items: {
               type: Type.OBJECT,
               properties: {
-                gapNumber: { type: Type.INTEGER },
-                question: { type: Type.STRING },
-                options: { type: Type.ARRAY, items: { type: Type.STRING } },
-                correctAnswer: { type: Type.STRING },
-                category: { type: Type.STRING },
-                explanation: { type: Type.STRING }
+                gapNumber: { type: Type.INTEGER, description: "11, 12, 13, 14, or 15" },
+                options: {
+                  type: Type.ARRAY,
+                  items: { type: Type.STRING },
+                  description: "Exactly 4 options, may be words or phrases: ['(A) ...', '(B) ...', '(C) ...', '(D) ...']"
+                },
+                correctAnswer: { type: Type.STRING, description: "Single letter only: A, B, C, or D" },
+                category: { type: Type.STRING, description: "vocabulary / grammar / collocation / idiom / discourse connector" },
+                explanation: { type: Type.STRING, description: "Traditional Chinese explanation" }
               },
-              required: ["gapNumber", "question", "options", "correctAnswer", "category", "explanation"]
+              required: ["gapNumber", "options", "correctAnswer", "category", "explanation"]
             }
           }
         },
@@ -167,10 +218,25 @@ You MUST follow the specified JSON schema strictly. Make sure all strings are co
       responseSchema.properties.blankMatchingSuite = {
         type: Type.OBJECT,
         properties: {
-          passage: { type: Type.STRING },
-          options: { type: Type.ARRAY, items: { type: Type.STRING } },
-          answers: { type: Type.ARRAY, items: { type: Type.STRING } },
-          explanations: { type: Type.ARRAY, items: { type: Type.STRING } }
+          passage: {
+            type: Type.STRING,
+            description: "200-250 word passage with blanks written as '__ 21 __' through '__ 30 __' inline"
+          },
+          options: {
+            type: Type.ARRAY,
+            items: { type: Type.STRING },
+            description: "Exactly 10 candidate strings: ['(A) word/phrase', '(B) ...', ..., '(J) ...']"
+          },
+          answers: {
+            type: Type.ARRAY,
+            items: { type: Type.STRING },
+            description: "Exactly 10 single letters (A-J) for blanks 21-30 in order. Each letter used exactly once."
+          },
+          explanations: {
+            type: Type.ARRAY,
+            items: { type: Type.STRING },
+            description: "Exactly 10 Traditional Chinese explanations, one per blank 21-30"
+          }
         },
         required: ["passage", "options", "answers", "explanations"]
       };
@@ -183,19 +249,24 @@ You MUST follow the specified JSON schema strictly. Make sure all strings are co
         items: {
           type: Type.OBJECT,
           properties: {
-            level: { type: Type.STRING },
+            level: { type: Type.STRING, description: "basic, essential, or advanced" },
             title: { type: Type.STRING },
-            passage: { type: Type.STRING },
+            passage: { type: Type.STRING, description: "250-300 word article-style passage" },
             questions: {
               type: Type.ARRAY,
+              description: "Exactly 4 comprehension questions",
               items: {
                 type: Type.OBJECT,
                 properties: {
                   id: { type: Type.STRING },
                   question: { type: Type.STRING },
-                  options: { type: Type.ARRAY, items: { type: Type.STRING } },
-                  correctAnswer: { type: Type.STRING },
-                  explanation: { type: Type.STRING }
+                  options: {
+                    type: Type.ARRAY,
+                    items: { type: Type.STRING },
+                    description: "Exactly 4 options: ['(A) ...', '(B) ...', '(C) ...', '(D) ...']"
+                  },
+                  correctAnswer: { type: Type.STRING, description: "Single letter only: A, B, C, or D" },
+                  explanation: { type: Type.STRING, description: "Traditional Chinese explanation with key sentence translation" }
                 },
                 required: ["id", "question", "options", "correctAnswer", "explanation"]
               }
@@ -215,7 +286,7 @@ You MUST follow the specified JSON schema strictly. Make sure all strings are co
         model,
         messages: [
           { role: "system", content: systemPrompt },
-          { role: "user", content: instructionsPrompt + "\n\nCRITICAL: You MUST return a single valid JSON object containing only the requested properties." }
+          { role: "user", content: instructionsPrompt + "\n\nCRITICAL: Return a single valid JSON object. All correctAnswer fields must be bare letters (A/B/C/D/E/F/G/H/I/J) with NO parentheses. All options arrays must be properly formed string arrays." }
         ],
         response_format: { type: "json_object" },
         temperature: 0.7,
@@ -224,7 +295,7 @@ You MUST follow the specified JSON schema strictly. Make sure all strings are co
     } else {
       const ai = getGenAI();
       const response = await ai.models.generateContent({
-        model: "gemini-2.0-flash", // ✅ Fixed: was "gemini-3.5-flash"
+        model: "gemini-2.0-flash",
         contents: instructionsPrompt,
         config: {
           systemInstruction: systemPrompt,
@@ -271,7 +342,7 @@ Provide:
 3. "tips": 3 actionable, highly tactical GSAT English study tips tailored to their score.
 4. "encouragement": A powerful, inspirational closing sentence for the final GSAT battle!
 
-Return structured JSON matching: { "greeting": string, "analysis": string, "tips": [string, string, string], "encouragement": string }`;
+Return structured JSON: { "greeting": string, "analysis": string, "tips": [string, string, string], "encouragement": string }`;
 
     let outputText = "";
     if (process.env.OPENAI_API_KEY) {
@@ -290,7 +361,7 @@ Return structured JSON matching: { "greeting": string, "analysis": string, "tips
     } else {
       const ai = getGenAI();
       const response = await ai.models.generateContent({
-        model: "gemini-2.0-flash", // ✅ Fixed: was "gemini-3.5-flash"
+        model: "gemini-2.0-flash",
         contents: userPrompt,
         config: {
           systemInstruction: systemPrompt,
