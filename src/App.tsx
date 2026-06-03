@@ -22,7 +22,6 @@ const REASSURING_MESSAGES = [
   "正在為你編寫多層次閱讀測驗：基本、精實、進階...",
   "正在由杜老師審對答案及 Traditional Chinese 專業詳解中..."
 ];
-
 export default function App() {
   const [activeTab, setActiveTab] = useState<"lobby" | "player" | "worksheet" | "report">("lobby");
   const [showSubmitConfirm, setShowSubmitConfirm] = useState(false);
