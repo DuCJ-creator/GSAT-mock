@@ -203,10 +203,10 @@ app.post("/api/generate-matching", async (req, res) => {
 
 QUALITY RULES:
 1. Write a natural, engaging 200-250 word article. Must read like a real article, NOT a textbook exercise.
-2. Place EXACTLY 10 blanks numbered inline as __ 21 __, __ 22 __, __ 23 __, __ 24 __, __ 25 __, __ 26 __, __ 27 __, __ 28 __, __ 29 __, __ 30 __
+2. Place EXACTLY 10 blanks numbered inline as __ 16 __, __ 17 __, __ 18 __, __ 19 __, __ 20 __, __ 21 __, __ 22 __, __ 23 __, __ 24 __, __ 25 __
 3. Count the blanks in your passage before responding — there must be EXACTLY 10.
 4. "options": EXACTLY 10 candidate strings (A) through (J). Mix single words and 2-3 word phrases. Make options deceptive by including similar parts of speech.
-5. "answers": EXACTLY 10 letters (one per blank 21-30). Each letter A-J used EXACTLY once.
+5. "answers": EXACTLY 10 letters (one per blank 16-25). Each letter A-J used EXACTLY once.
 6. "explanations": EXACTLY 10 Traditional Chinese explanations (one per blank).
 7. Each blank must have EXACTLY ONE correct answer from the options. The other 9 options must not fit that blank grammatically or semantically.
 8. Verify counts: 10 blanks in passage, 10 options, 10 answers, 10 explanations.
