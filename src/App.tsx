@@ -25,6 +25,7 @@ const REASSURING_MESSAGES = [
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<"lobby" | "player" | "worksheet" | "report">("lobby");
+  const [showSubmitConfirm, setShowSubmitConfirm] = useState(false);
 
   const [vocabSource, setVocabSource] = useState<"system" | "self-input">("system");
   const [selectedLevel, setSelectedLevel] = useState<number>(4);
@@ -233,6 +234,11 @@ export default function App() {
   };
 
   const handleInteractiveSubmitAnswers = () => {
+    setShowSubmitConfirm(true);
+  };
+
+  const handleConfirmedSubmit = () => {
+    setShowSubmitConfirm(false);
     if (!examSuite) return;
 
     const reportDetails: any[] = [];
@@ -631,10 +637,8 @@ export default function App() {
                     <span>Part IV: Reading</span><span className="bg-black/10 text-[9px] px-2 py-0.5 rounded-full">{(examSuite.readingPassages?.length || 0) * 4} Qs</span>
                   </button>
                 )}
-                <div className="border-t border-stone-100 pt-3 mt-2">
-                  <button onClick={handleInteractiveSubmitAnswers} className="w-full bg-teal-800 hover:bg-teal-900 text-white text-xs font-semibold py-2 rounded-xl transition">
-                    Diagnose Now
-                  </button>
+                <div className="border-t border-stone-100 pt-3 mt-2 text-center">
+                  <p className="text-[10px] text-stone-400 font-sans leading-relaxed">完成所有題目後，<br />點擊右上角「Submit」提交。</p>
                 </div>
               </div>
 
@@ -810,10 +814,24 @@ export default function App() {
 
                 <div className="border-t border-stone-150 pt-6 mt-12 flex justify-between items-center text-xs">
                   <span className="text-stone-400 italic">Have faith in your English intuition!</span>
-                  <button onClick={handleInteractiveSubmitAnswers}
-                    className="px-6 py-3 bg-teal-800 hover:bg-teal-900 text-white font-semibold rounded-2xl flex items-center gap-1.5 shadow-sm transition">
-                    <CheckCircle className="w-4 h-4" /> Submit Final Assessment
-                  </button>
+                  {/* Next section button — navigate between sections without submitting */}
+                  {currentSection === "vocab" && examSuite.clozeSuite ? (
+                    <button onClick={() => setCurrentSection("cloze")} className="px-6 py-3 bg-stone-700 hover:bg-stone-800 text-white font-semibold rounded-2xl flex items-center gap-1.5 shadow-sm transition">
+                      Next: Cloze →
+                    </button>
+                  ) : currentSection === "cloze" && examSuite.blankMatchingSuite ? (
+                    <button onClick={() => setCurrentSection("matching")} className="px-6 py-3 bg-stone-700 hover:bg-stone-800 text-white font-semibold rounded-2xl flex items-center gap-1.5 shadow-sm transition">
+                      Next: Blank Matching →
+                    </button>
+                  ) : currentSection === "matching" && examSuite.readingPassages?.length > 0 ? (
+                    <button onClick={() => setCurrentSection("reading")} className="px-6 py-3 bg-stone-700 hover:bg-stone-800 text-white font-semibold rounded-2xl flex items-center gap-1.5 shadow-sm transition">
+                      Next: Reading →
+                    </button>
+                  ) : (
+                    <button onClick={handleInteractiveSubmitAnswers} className="px-6 py-3 bg-teal-800 hover:bg-teal-900 text-white font-semibold rounded-2xl flex items-center gap-1.5 shadow-sm transition">
+                      <CheckCircle className="w-4 h-4" /> Submit Final Assessment
+                    </button>
+                  )}
                 </div>
               </div>
             </div>
@@ -830,10 +848,37 @@ export default function App() {
             suite={examSuite}
             onRestart={() => { setExamSuite(null); setActiveTab("lobby"); }}
             onGoToWorksheet={() => setActiveTab("worksheet")}
+            onReviewExam={() => setActiveTab("player")}
           />
         )}
 
       </main>
+
+      {/* Confirmation modal */}
+      {showSubmitConfirm && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl p-6 md:p-8 max-w-md w-full shadow-xl space-y-4">
+            <h3 className="text-lg font-bold text-stone-900">確認交卷？</h3>
+            <p className="text-sm text-stone-600">交卷後將無法修改答案。請確認你已完成所有想作答的題目。</p>
+            <div className="bg-stone-50 rounded-xl p-4 text-xs text-stone-600 space-y-1">
+              <p>✅ 字彙題：{Object.keys(session.answers.vocab).length} / {examSuite?.vocabQuestions?.length || 0} answered</p>
+              <p>✅ 綜合測驗：{Object.keys(session.answers.cloze).length} / {examSuite?.clozeSuite?.questions?.length || 0} answered</p>
+              <p>✅ 文意選填：{Object.keys(session.answers.blankMatching).length} / 10 answered</p>
+              <p>✅ 閱讀測驗：{Object.keys(session.answers.reading).length} / {(examSuite?.readingPassages?.reduce((a, p) => a + p.questions.length, 0)) || 0} answered</p>
+            </div>
+            <div className="flex gap-3 pt-2">
+              <button onClick={() => setShowSubmitConfirm(false)}
+                className="flex-1 py-2.5 border border-stone-300 rounded-xl text-sm font-semibold text-stone-700 hover:bg-stone-50 transition">
+                繼續作答
+              </button>
+              <button onClick={handleConfirmedSubmit}
+                className="flex-1 py-2.5 bg-teal-800 hover:bg-teal-900 text-white rounded-xl text-sm font-semibold transition">
+                確認交卷
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       <footer className="no-print bg-white border-t border-stone-200 mt-16 py-6 text-center text-[11px] text-stone-500">
         <p className="font-semibold text-stone-700">GSAT English Mock Paper Creator • 學測英文模考創建器</p>
