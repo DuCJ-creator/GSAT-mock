@@ -146,16 +146,22 @@ Critical rules:
 5. Passages read like real articles, not textbook exercises.
 6. "correctAnswer" fields contain ONLY a single letter: A, B, C, D, E, F, G, H, I, or J — never "(A)" with parentheses.`;
 
-    const instructionsPrompt = `Please generate the requested GSAT exam exercises based on the following vocabulary:
+   const instructionsPrompt = `Please generate the requested GSAT exam exercises based on the following vocabulary:
 ${vocabString}
 
 Active sections to generate: ${activeSections.join(", ")}.
 
+CRITICAL QUANTITY REQUIREMENTS — these are HARD minimums, not suggestions:
+- vocabQuestions: EXACTLY 10 questions, no fewer. Count them before responding.
+- clozeSuite: EXACTLY 5 blanks (gaps 11, 12, 13, 14, 15), no fewer.
+- blankMatchingSuite: EXACTLY 10 blanks (gaps 21–30) with EXACTLY 10 options (A)–(J).
+- readingPassages: EXACTLY 1 passage per requested level with EXACTLY 4 questions each.
+
 Detailed guidelines per section:
 ${sectionsGuidelines}
 
-CRITICAL: Follow the JSON schema exactly. "correctAnswer" must always be a bare letter (e.g. "A" not "(A)"). All "options" arrays must be properly formed string arrays.`;
-
+CRITICAL: Follow the JSON schema exactly. Count every array before finalizing. "correctAnswer" must always be a bare letter (e.g. "A" not "(A)"). All "options" arrays must be properly formed string arrays.`;
+ 
     const responseSchema: any = { type: Type.OBJECT, properties: {}, required: [] };
 
     if (selectedExerciseTypes.vocab) {
@@ -289,7 +295,7 @@ CRITICAL: Follow the JSON schema exactly. "correctAnswer" must always be a bare 
           { role: "user", content: instructionsPrompt + "\n\nCRITICAL: Return a single valid JSON object. All correctAnswer fields must be bare letters (A/B/C/D/E/F/G/H/I/J) with NO parentheses. All options arrays must be properly formed string arrays." }
         ],
         response_format: { type: "json_object" },
-        temperature: 0.7,
+        temperature: 0.3,
       });
       outputText = response.choices[0].message.content || "";
     } else {
@@ -301,7 +307,7 @@ CRITICAL: Follow the JSON schema exactly. "correctAnswer" must always be a bare 
           systemInstruction: systemPrompt,
           responseMimeType: "application/json",
           responseSchema,
-          temperature: 0.7,
+          temperature: 0.3,
         },
       });
       outputText = response.text || "";
