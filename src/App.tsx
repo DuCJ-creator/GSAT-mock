@@ -16,11 +16,11 @@ import ProgressReportView from "./components/ProgressReportView";
 
 const REASSURING_MESSAGES = [
   "正在剖析大數據：挑選最適合學測程度的精選搭配詞...",
-  "正在為你研擬高擬真的學測字彙單選題...",
+  "杜老師正在為你研擬高擬真的學測字彙單選題...",
   "正在架構『綜合測驗』克漏字：融入文法、介系詞、轉折詞巧思...",
   "正在撰寫『文意選填』：配置 10 組極具欺騙性的高級字彙選項...",
   "正在為你編寫多層次閱讀測驗：基本、精實、進階...",
-  "正在審對答案及 Traditional Chinese 專業詳解中..."
+  "正在由杜老師審對答案及 Traditional Chinese 專業詳解中..."
 ];
 
 export default function App() {
@@ -295,9 +295,9 @@ export default function App() {
         if (isCorrect) summary.blankMatching.correct++;
         summary.blankMatching.total++;
         reportDetails.push({
-          section: "blankMatching", questionNumberOrName: String(idx + 21),
+          section: "blankMatching", questionNumberOrName: String(idx + 16),
           isCorrect, userAnswer: userAns, correctAnswer: correctAns,
-          questionText: `文意選填第 __ ${idx + 21} __ 格`
+          questionText: `文意選填第 __ ${idx + 16} __ 格`
         });
       });
       summary.blankMatching.score = summary.blankMatching.total > 0 ? Math.round((summary.blankMatching.correct / summary.blankMatching.total) * 100) : 0;
@@ -649,7 +649,7 @@ export default function App() {
                 {currentSection === "vocab" && examSuite.vocabQuestions && (
                   <div className="space-y-6">
                     <div className="border-b border-stone-100 pb-3 flex justify-between items-center">
-                      <h3 className="text-base font-bold text-stone-900">Part I: Vocabulary MCQ</h3>
+                      <h3 className="text-base font-bold text-stone-900">Part I: Vocabulary MCQ (字彙單選題 1–10)</h3>
                       <span className="text-[10px] font-mono text-stone-500">
                         {Object.keys(session.answers.vocab).length}/10 answered
                       </span>
@@ -658,16 +658,21 @@ export default function App() {
                       {examSuite.vocabQuestions.map((q, qIndex) => {
                         const answerKey = `vocab_${qIndex}`;
                         const userSelectedChoice = session.answers.vocab[answerKey] || "";
+                        const questionText = q.question || q.prompt || q.sentence || q.stem || "";
                         return (
                           <div key={answerKey} className="space-y-3 p-4 hover:bg-stone-50/50 rounded-xl border border-transparent hover:border-stone-150">
                             <span className="font-mono text-xs font-bold text-amber-800 bg-amber-50 rounded-lg px-2 py-0.5">Question {qIndex + 1}</span>
-                            <p className="font-semibold text-stone-900 text-base leading-relaxed">{q.question}</p>
+                            {questionText ? (
+                              <p className="font-semibold text-stone-900 text-base leading-relaxed">{questionText}</p>
+                            ) : (
+                              <p className="text-xs text-rose-500 italic">⚠ Question text missing — please regenerate.</p>
+                            )}
                             <div className="grid grid-cols-1 md:grid-cols-4 gap-2.5 mt-4">
-                              {["A", "B", "C", "D"].map((letter) => {
-                                const optString = normalizeOptions(q.options).find(o => o.startsWith(`(${letter})`)) || `(${letter})`;
+                              {normalizeOptions(q.options).map((optString, optIdx) => {
+                                const letter = optString.charAt(1);
                                 const isSelected = userSelectedChoice === letter;
                                 return (
-                                  <button key={letter} type="button"
+                                  <button key={optIdx} type="button"
                                     onClick={() => setSession(prev => ({ ...prev, answers: { ...prev.answers, vocab: { ...prev.answers.vocab, [answerKey]: letter } } }))}
                                     className={`py-3 px-4 rounded-xl text-xs text-left font-semibold border transition ${isSelected ? "bg-teal-700 text-white border-teal-700" : "bg-white text-stone-700 border-stone-250 hover:bg-stone-50"}`}>
                                     {optString}
@@ -686,25 +691,26 @@ export default function App() {
                 {currentSection === "cloze" && examSuite.clozeSuite && examSuite.clozeSuite.questions && (
                   <div className="space-y-6">
                     <div className="border-b border-stone-100 pb-3">
-                      <h3 className="text-base font-bold text-stone-900">Part II: Cloze Test (綜合測驗)</h3>
-                      <p className="text-xs text-stone-500 mt-0.5">為標號空格 11–15 選出最適合的答案。</p>
+                      <h3 className="text-base font-bold text-stone-900">Part II: Cloze Test (綜合測驗 11–15)</h3>
+                      <p className="text-xs text-stone-500 mt-0.5">閱讀文章後，為標號空格 11–15 選出最適合的答案。</p>
                     </div>
                     <div className="bg-stone-50 border border-stone-200 rounded-2xl p-5 text-base font-sans leading-loose text-stone-800 whitespace-pre-wrap">
                       {examSuite.clozeSuite.passage}
                     </div>
                     <div className="space-y-4 mt-4">
-                      <span className="text-xs font-bold font-mono text-stone-400 uppercase tracking-widest block">Gaps 11–15:</span>
+                      <span className="text-xs font-bold font-mono text-stone-400 uppercase tracking-widest block">Choose options for gaps 11–15:</span>
                       {examSuite.clozeSuite.questions.map((q, idx) => {
                         const userSel = session.answers.cloze[q.gapNumber] || "";
+                        const opts = normalizeOptions(q.options);
                         return (
                           <div key={idx} className="bg-white border border-stone-200 rounded-xl p-4 space-y-3">
                             <span className="text-xs font-bold font-mono text-amber-800">Gap ({q.gapNumber})</span>
                             <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-                              {["A", "B", "C", "D"].map((letter) => {
-                                const optString = normalizeOptions(q.options).find(o => o.startsWith(`(${letter})`)) || `(${letter})`;
+                              {opts.map((optString, optIdx) => {
+                                const letter = optString.charAt(1);
                                 const isSelected = userSel === letter;
                                 return (
-                                  <button key={letter} type="button"
+                                  <button key={optIdx} type="button"
                                     onClick={() => setSession(prev => ({ ...prev, answers: { ...prev.answers, cloze: { ...prev.answers.cloze, [q.gapNumber]: letter } } }))}
                                     className={`py-2 px-3 rounded-lg text-xs font-semibold text-center border transition ${isSelected ? "bg-teal-700 text-white border-teal-700" : "bg-white text-stone-700 border-stone-300 hover:bg-stone-50"}`}>
                                     {optString}
@@ -723,8 +729,8 @@ export default function App() {
                 {currentSection === "matching" && examSuite.blankMatchingSuite && (
                   <div className="space-y-6">
                     <div className="border-b border-stone-100 pb-3">
-                      <h3 className="text-base font-bold text-stone-900">Part III: Blank Matching (文意選填)</h3>
-                      <p className="text-xs text-stone-500 mt-0.5">為空格 21–30 選出最適合的候選詞。每選項限用一次。</p>
+                      <h3 className="text-base font-bold text-stone-900">Part III: Blank Matching (文意選填 16–25)</h3>
+                      <p className="text-xs text-stone-500 mt-0.5">為空格 16–25 選出最適合的候選詞。每選項限用一次。</p>
                     </div>
                     <div className="bg-stone-100 border border-stone-200 rounded-xl p-4">
                       <span className="text-xs font-mono font-bold uppercase text-stone-500 block mb-3 text-center">Candidate Options (A)–(J)</span>
@@ -745,7 +751,7 @@ export default function App() {
                     </div>
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                       {Array.from({ length: 10 }).map((_, idx) => {
-                        const gapNo = idx + 21;
+                        const gapNo = idx + 16;
                         const userSel = session.answers.blankMatching[idx] || "";
                         return (
                           <div key={idx} className="bg-white border border-stone-200 rounded-xl p-4 flex justify-between items-center gap-3">
@@ -773,7 +779,8 @@ export default function App() {
                 {currentSection === "reading" && examSuite.readingPassages && (
                   <div className="space-y-8">
                     <div className="border-b border-stone-100 pb-3">
-                      <h3 className="text-base font-bold text-stone-900">Part IV: Reading Comprehension</h3>
+                      <h3 className="text-base font-bold text-stone-900">Part IV: Reading Comprehension (閱讀測驗 26+)</h3>
+                      <p className="text-xs text-stone-500 mt-0.5">仔細閱讀文章後作答。</p>
                     </div>
                     {examSuite.readingPassages.map((p, pIdx) => (
                       <div key={pIdx} className="space-y-6 border-b border-stone-200 pb-8 last:border-none">
@@ -786,16 +793,18 @@ export default function App() {
                           {p.questions.map((q, qIdx) => {
                             const userKey = `${pIdx}_${qIdx}`;
                             const userAns = session.answers.reading[userKey] || "";
+                            const questionNumber = 26 + (pIdx * 4) + qIdx;
+                            const opts = normalizeOptions(q.options);
                             return (
                               <div key={userKey} className="bg-stone-50/50 p-4 rounded-xl border border-stone-150/50 space-y-3">
-                                <span className="font-mono text-[11px] font-bold text-stone-500 uppercase block">Question {qIdx + 1}</span>
+                                <span className="font-mono text-[11px] font-bold text-stone-500 uppercase block">Question {questionNumber}</span>
                                 <p className="font-semibold text-stone-900 text-sm leading-relaxed">{q.question}</p>
                                 <div className="flex flex-col gap-2 mt-3 pl-1">
-                                  {["A", "B", "C", "D"].map((letter) => {
-                                    const optStr = normalizeOptions(q.options).find(o => o.startsWith(`(${letter})`)) || `(${letter})`;
+                                  {opts.map((optStr, optIdx) => {
+                                    const letter = optStr.charAt(1);
                                     const isSelected = userAns === letter;
                                     return (
-                                      <button key={letter} type="button"
+                                      <button key={optIdx} type="button"
                                         onClick={() => setSession(prev => ({ ...prev, answers: { ...prev.answers, reading: { ...prev.answers.reading, [userKey]: letter } } }))}
                                         className={`py-2 px-4 rounded-lg text-xs text-left font-semibold border transition ${isSelected ? "bg-teal-700 text-white border-teal-700" : "bg-white text-stone-700 border-stone-300 hover:bg-stone-50"}`}>
                                         {optStr}
@@ -863,7 +872,7 @@ export default function App() {
             <div className="bg-stone-50 rounded-xl p-4 text-xs text-stone-600 space-y-1">
               <p>✅ 字彙題：{Object.keys(session.answers.vocab).length} / {examSuite?.vocabQuestions?.length || 0} answered</p>
               <p>✅ 綜合測驗：{Object.keys(session.answers.cloze).length} / {examSuite?.clozeSuite?.questions?.length || 0} answered</p>
-              <p>✅ 文意選填：{Object.keys(session.answers.blankMatching).length} / 10 answered</p>
+              <p>✅ 文意選填：{Object.keys(session.answers.blankMatching).length} / 10 answered (gaps 16–25)</p>
               <p>✅ 閱讀測驗：{Object.keys(session.answers.reading).length} / {(examSuite?.readingPassages?.reduce((a, p) => a + p.questions.length, 0)) || 0} answered</p>
             </div>
             <div className="flex gap-3 pt-2">
