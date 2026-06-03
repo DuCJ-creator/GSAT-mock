@@ -16,11 +16,11 @@ import ProgressReportView from "./components/ProgressReportView";
 
 const REASSURING_MESSAGES = [
   "正在剖析大數據：挑選最適合學測程度的精選搭配詞...",
-  "杜老師正在為你研擬高擬真的學測字彙單選題...",
+  "正在為你研擬高擬真的學測字彙單選題...",
   "正在架構『綜合測驗』克漏字：融入文法、介系詞、轉折詞巧思...",
   "正在撰寫『文意選填』：配置 10 組極具欺騙性的高級字彙選項...",
   "正在為你編寫多層次閱讀測驗：基本、精實、進階...",
-  "正在由杜老師審對答案及 Traditional Chinese 專業詳解中..."
+  "正在審對答案及 Traditional Chinese 專業詳解中..."
 ];
 
 export default function App() {
