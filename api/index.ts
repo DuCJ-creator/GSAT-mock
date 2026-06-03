@@ -41,13 +41,12 @@ async function callOpenAI(system: string, user: string): Promise<any> {
     model,
     messages: [
       { role: "system", content: system },
-      { role: "user", content: user + "\n\nCRITICAL: Return ONLY a valid JSON object. No markdown, no explanation." }
+      { role: "user", content: user + "\n\nCRITICAL: Return ONLY a valid JSON object. No markdown, no explanation outside JSON." }
     ],
     response_format: { type: "json_object" },
     temperature: 0.3,
   });
-  const content = response.choices[0].message.content || "";
-  return JSON.parse(content.trim());
+  return JSON.parse((response.choices[0].message.content || "").trim());
 }
 
 async function callGemini(prompt: string, schema: any): Promise<any> {
@@ -66,34 +65,33 @@ async function callGemini(prompt: string, schema: any): Promise<any> {
   return JSON.parse(response.text.trim());
 }
 
-// ── Health check ──────────────────────────────────────────────
-app.get("/api/health", (req, res) => {
-  res.json({ status: "ok" });
-});
+// ── Health ────────────────────────────────────────────────────
+app.get("/api/health", (req, res) => res.json({ status: "ok" }));
 
-// ── Generate vocab questions only ────────────────────────────
+// ── Vocab ─────────────────────────────────────────────────────
 app.post("/api/generate-vocab", async (req, res) => {
   try {
     const { vocabList } = req.body;
     verifyApiKeys();
 
     const vocabString = vocabList?.length > 0
-      ? vocabList.map((vw: any) => `"${vw.word}" (${vw.pos || ""}, meaning: ${vw.meaning || ""})`).join(", ")
+      ? vocabList.map((vw: any) => `"${vw.word}" (${vw.pos || ""})`).join(", ")
       : "standard GSAT Level 3-6 vocabulary";
 
-    const system = `You are Tr. Shirley Du, an elite GSAT English educator in Taiwan. Generate exactly 10 vocabulary MCQ questions in JSON.`;
+    const system = `You are an expert GSAT English question writer for Taiwan high school students. You write precise, unambiguous multiple-choice vocabulary questions.`;
 
-    const user = `Generate EXACTLY 10 GSAT vocabulary multiple-choice questions using these words: ${vocabString}
+    const user = `Generate EXACTLY 10 GSAT-style vocabulary fill-in-the-blank questions using words from: ${vocabString}
 
-STRICT RULES:
-- EXACTLY 10 questions in the array — count before responding.
-- Each "question" is a complete sentence with exactly one "______" (six underscores) blank.
-- CRITICAL: Do NOT use the correct answer word anywhere in the question sentence itself.
-- "options": exactly 4 strings: ["(A) word", "(B) word", "(C) word", "(D) word"] — single words only.
-- "correctAnswer": EXACTLY one bare letter: "A", "B", "C", or "D" — NO parentheses.
-- Correct answers MUST be distributed: roughly A×2-3, B×2-3, C×2-3, D×2-3. Do NOT put all answers as "A".
-- "wordTested": the correct answer word.
-- "explanation": Traditional Chinese explanation.
+QUALITY RULES — each question MUST pass all of these:
+1. The sentence must have EXACTLY ONE word that correctly fills the blank. If two or more options could reasonably fit, rewrite the sentence with more context clues.
+2. The sentence MUST NOT contain the answer word or any morphological variant of it.
+3. The sentence must provide enough syntactic and semantic context to make the correct answer unambiguous.
+4. Distractors must be plausible words of the same part of speech, but semantically wrong in context.
+5. Each "question" is a complete natural English sentence with "______" (six underscores) as the blank.
+6. "options": exactly 4 strings ["(A) word", "(B) word", "(C) word", "(D) word"] — single words only.
+7. "correctAnswer": EXACTLY one bare letter with NO parentheses. 
+8. ANSWER DISTRIBUTION IS MANDATORY: Across all 10 questions, the correct answers MUST be distributed as follows — exactly 2 or 3 questions with answer A, exactly 2 or 3 with answer B, exactly 2 or 3 with answer C, exactly 2 or 3 with answer D. Count and verify before responding. Do NOT put more than 3 answers on the same letter.
+9. "explanation": Traditional Chinese explanation of why the answer is correct and why each distractor is wrong.
 
 Return JSON: { "vocabQuestions": [ ...exactly 10 items... ] }`;
 
@@ -119,18 +117,15 @@ Return JSON: { "vocabQuestions": [ ...exactly 10 items... ] }`;
       required: ["vocabQuestions"]
     };
 
-    const data = process.env.OPENAI_API_KEY
-      ? await callOpenAI(system, user)
-      : await callGemini(user, schema);
-
+    const data = process.env.OPENAI_API_KEY ? await callOpenAI(system, user) : await callGemini(user, schema);
     res.json({ success: true, data });
   } catch (error: any) {
-    console.error("Vocab generation error:", error);
+    console.error("Vocab error:", error);
     res.status(500).json({ success: false, error: error.message });
   }
 });
 
-// ── Generate cloze only ───────────────────────────────────────
+// ── Cloze ─────────────────────────────────────────────────────
 app.post("/api/generate-cloze", async (req, res) => {
   try {
     const { vocabList } = req.body;
@@ -140,16 +135,19 @@ app.post("/api/generate-cloze", async (req, res) => {
       ? vocabList.map((vw: any) => `"${vw.word}"`).join(", ")
       : "standard GSAT vocabulary";
 
-    const system = `You are Tr. Shirley Du, an elite GSAT English educator in Taiwan. Generate a cloze passage in JSON.`;
+    const system = `You are an expert GSAT English cloze passage writer for Taiwan high school exams.`;
 
-    const user = `Generate 1 GSAT-style cloze passage (綜合測驗) with EXACTLY 5 blanks using vocabulary: ${vocabString}
+    const user = `Generate 1 GSAT-style cloze passage (綜合測驗) referencing vocabulary: ${vocabString}
 
-STRICT RULES:
-- "passage": 150-180 word natural article. Blanks MUST be written as "__ 11 __", "__ 12 __", "__ 13 __", "__ 14 __", "__ 15 __" inline.
-- "questions": EXACTLY 5 items for gaps 11, 12, 13, 14, 15.
-- Each question: "gapNumber" (integer 11-15), "options" (exactly 4 strings as phrases or words: ["(A)...", "(B)...", "(C)...", "(D)..."]), "correctAnswer" (bare letter A/B/C/D only — NO parentheses), "category", "explanation" (Traditional Chinese).
-- Correct answers MUST be distributed: not all the same letter. Spread across A, B, C, D.
-- CRITICAL: The passage must have EXACTLY 5 blanks — count them before responding.
+QUALITY RULES:
+1. Write a natural, engaging 150-180 word article on an interesting topic (science, culture, nature, psychology, history). It must read like a real magazine article, NOT a textbook exercise.
+2. Place EXACTLY 5 blanks numbered inline as: __ 11 __, __ 12 __, __ 13 __, __ 14 __, __ 15 __
+3. Each blank tests ONE specific thing: vocabulary, grammar, collocation, discourse connector, or idiom.
+4. For each blank, write 4 options. ONLY ONE option must be correct. The other 3 must be clearly wrong in context (wrong grammar, wrong collocation, or wrong meaning). Options may be words OR short phrases.
+5. "correctAnswer": bare letter A/B/C/D — NO parentheses.
+6. ANSWER DISTRIBUTION: across the 5 gaps, spread answers across A, B, C, D. Do NOT make all answers the same letter.
+7. Verify: the passage has EXACTLY 5 inline blanks formatted as __ 11 __ through __ 15 __.
+8. "explanation": Traditional Chinese explanation per gap.
 
 Return JSON: { "clozeSuite": { "passage": "...", "questions": [...exactly 5 items...] } }`;
 
@@ -181,18 +179,15 @@ Return JSON: { "clozeSuite": { "passage": "...", "questions": [...exactly 5 item
       required: ["clozeSuite"]
     };
 
-    const data = process.env.OPENAI_API_KEY
-      ? await callOpenAI(system, user)
-      : await callGemini(user, schema);
-
+    const data = process.env.OPENAI_API_KEY ? await callOpenAI(system, user) : await callGemini(user, schema);
     res.json({ success: true, data });
   } catch (error: any) {
-    console.error("Cloze generation error:", error);
+    console.error("Cloze error:", error);
     res.status(500).json({ success: false, error: error.message });
   }
 });
 
-// ── Generate blank matching only ──────────────────────────────
+// ── Blank Matching ────────────────────────────────────────────
 app.post("/api/generate-matching", async (req, res) => {
   try {
     const { vocabList } = req.body;
@@ -202,19 +197,21 @@ app.post("/api/generate-matching", async (req, res) => {
       ? vocabList.map((vw: any) => `"${vw.word}"`).join(", ")
       : "standard GSAT vocabulary";
 
-    const system = `You are Tr. Shirley Du, an elite GSAT English educator in Taiwan. Generate a blank matching passage in JSON.`;
+    const system = `You are an expert GSAT English blank-matching passage writer for Taiwan high school exams.`;
 
-    const user = `Generate 1 GSAT-style blank matching passage (文意選填) with EXACTLY 10 blanks using vocabulary: ${vocabString}
+    const user = `Generate 1 GSAT-style blank matching passage (文意選填) referencing vocabulary: ${vocabString}
 
-STRICT RULES:
-- "passage": 200-250 word natural article. Blanks MUST be written as "__ 21 __", "__ 22 __", ..., "__ 30 __" inline. EXACTLY 10 blanks — count before responding.
-- "options": EXACTLY 10 strings labeled (A) through (J): ["(A) word/phrase", "(B)...", ..., "(J)..."]. Mix single words and short phrases.
-- "answers": EXACTLY 10 single letters (A-J) for blanks 21-30 in order. Each letter used EXACTLY once.
-- "explanations": EXACTLY 10 Traditional Chinese explanation strings.
-- Correct answers must use ALL 10 letters A through J exactly once each.
-- CRITICAL: Count blanks in passage (must be 10), count options (must be 10), count answers (must be 10).
+QUALITY RULES:
+1. Write a natural, engaging 200-250 word article. Must read like a real article, NOT a textbook exercise.
+2. Place EXACTLY 10 blanks numbered inline as __ 21 __, __ 22 __, __ 23 __, __ 24 __, __ 25 __, __ 26 __, __ 27 __, __ 28 __, __ 29 __, __ 30 __
+3. Count the blanks in your passage before responding — there must be EXACTLY 10.
+4. "options": EXACTLY 10 candidate strings (A) through (J). Mix single words and 2-3 word phrases. Make options deceptive by including similar parts of speech.
+5. "answers": EXACTLY 10 letters (one per blank 21-30). Each letter A-J used EXACTLY once.
+6. "explanations": EXACTLY 10 Traditional Chinese explanations (one per blank).
+7. Each blank must have EXACTLY ONE correct answer from the options. The other 9 options must not fit that blank grammatically or semantically.
+8. Verify counts: 10 blanks in passage, 10 options, 10 answers, 10 explanations.
 
-Return JSON: { "blankMatchingSuite": { "passage": "...", "options": [...10...], "answers": [...10...], "explanations": [...10...] } }`;
+Return JSON: { "blankMatchingSuite": { "passage": "...", "options": [...10...], "answers": [...10 letters A-J...], "explanations": [...10...] } }`;
 
     const schema = {
       type: Type.OBJECT,
@@ -233,18 +230,15 @@ Return JSON: { "blankMatchingSuite": { "passage": "...", "options": [...10...], 
       required: ["blankMatchingSuite"]
     };
 
-    const data = process.env.OPENAI_API_KEY
-      ? await callOpenAI(system, user)
-      : await callGemini(user, schema);
-
+    const data = process.env.OPENAI_API_KEY ? await callOpenAI(system, user) : await callGemini(user, schema);
     res.json({ success: true, data });
   } catch (error: any) {
-    console.error("Matching generation error:", error);
+    console.error("Matching error:", error);
     res.status(500).json({ success: false, error: error.message });
   }
 });
 
-// ── Generate reading only ─────────────────────────────────────
+// ── Reading ───────────────────────────────────────────────────
 app.post("/api/generate-reading", async (req, res) => {
   try {
     const { vocabList, selectedReadingLevels } = req.body;
@@ -255,20 +249,20 @@ app.post("/api/generate-reading", async (req, res) => {
       ? vocabList.map((vw: any) => `"${vw.word}"`).join(", ")
       : "standard GSAT vocabulary";
 
-    const system = `You are Tr. Shirley Du, an elite GSAT English educator in Taiwan. Generate reading comprehension passages in JSON.`;
+    const system = `You are an expert GSAT English reading comprehension writer for Taiwan high school exams.`;
 
-    const user = `Generate GSAT reading comprehension passages for these levels: ${levels.join(", ")}.
-Vocabulary reference: ${vocabString}
+    const user = `Generate reading comprehension passages for levels: ${levels.join(", ")} using vocabulary: ${vocabString}
 
-STRICT RULES:
-- For EACH level in [${levels.join(", ")}], generate exactly 1 passage with EXACTLY 4 questions.
-- "level": must match the requested level exactly ("basic", "essential", or "advanced").
-- "title": engaging article title.
-- "passage": 250-300 word natural article (NOT a textbook exercise).
-- "questions": EXACTLY 4 comprehension questions per passage.
-- Each question: "id" (unique), "question" (string), "options" (exactly 4: ["(A)...", "(B)...", "(C)...", "(D)..."]), "correctAnswer" (bare letter A/B/C/D — NO parentheses), "explanation" (Traditional Chinese with key sentence translation).
-- Correct answers MUST be distributed across A, B, C, D — do NOT cluster on one letter.
-- CRITICAL: Return EXACTLY ${levels.length} passage(s) in the array.
+QUALITY RULES:
+1. For EACH level [${levels.join(", ")}], write exactly 1 passage (250-300 words) on a genuinely interesting topic.
+2. The passage must read like a real magazine or academic article — engaging, natural, informative.
+3. Each passage has EXACTLY 4 comprehension questions testing different skills: main idea, specific detail, vocabulary in context, inference or title.
+4. "options": exactly 4 strings per question: ["(A) ...", "(B) ...", "(C) ...", "(D) ..."]. Options can be full sentences or short phrases.
+5. "correctAnswer": bare letter A/B/C/D — NO parentheses.
+6. ANSWER DISTRIBUTION: across all questions in a passage, spread answers across A, B, C, D. Do NOT cluster on one letter.
+7. Each question must have EXACTLY ONE unambiguously correct answer supported by the passage text.
+8. "explanation": Traditional Chinese explanation with the key evidence sentence from the passage translated.
+9. Return EXACTLY ${levels.length} passage(s).
 
 Return JSON: { "readingPassages": [...exactly ${levels.length} passage(s)...] }`;
 
@@ -305,33 +299,29 @@ Return JSON: { "readingPassages": [...exactly ${levels.length} passage(s)...] }`
       required: ["readingPassages"]
     };
 
-    const data = process.env.OPENAI_API_KEY
-      ? await callOpenAI(system, user)
-      : await callGemini(user, schema);
-
+    const data = process.env.OPENAI_API_KEY ? await callOpenAI(system, user) : await callGemini(user, schema);
     res.json({ success: true, data });
   } catch (error: any) {
-    console.error("Reading generation error:", error);
+    console.error("Reading error:", error);
     res.status(500).json({ success: false, error: error.message });
   }
 });
 
-// ── Evaluate and generate commentary report ───────────────────
+// ── Evaluate report ───────────────────────────────────────────
 app.post("/api/evaluate-report", async (req, res) => {
   try {
     const { scoreSummary, selectedLevel } = req.body;
     verifyApiKeys();
 
-    const system = `You are Tr. Shirley Du, an English educator in Taiwan specializing in GSAT (學測英文) preparation. Your style is warm, caring, humorous, encouraging, and deeply professional. Write in Traditional Chinese.`;
-
-    const user = `Write a personalized progress commentary report as Tr. Shirley Du.
+    const system = `You are Tr. Shirley Du, a warm, encouraging GSAT English educator in Taiwan. Write in Traditional Chinese.`;
+    const user = `Write a personalized progress report as Tr. Shirley Du.
 Performance:
 - Overall: ${scoreSummary.comprehensive.correct}/${scoreSummary.comprehensive.total} (${scoreSummary.comprehensive.score}%)
 - Vocabulary: ${scoreSummary.vocab.correct}/${scoreSummary.vocab.total}
 - Cloze: ${scoreSummary.cloze.correct}/${scoreSummary.cloze.total}
 - Blank Matching: ${scoreSummary.blankMatching.correct}/${scoreSummary.blankMatching.total}
 - Reading: ${scoreSummary.reading.correct}/${scoreSummary.reading.total}
-- Level: GSAT Level ${selectedLevel || "Mixed"}
+- Level: ${selectedLevel || "Mixed"}
 
 Return JSON: { "greeting": string, "analysis": string, "tips": [string, string, string], "encouragement": string }`;
 
@@ -346,13 +336,10 @@ Return JSON: { "greeting": string, "analysis": string, "tips": [string, string, 
       required: ["greeting", "analysis", "tips", "encouragement"]
     };
 
-    const data = process.env.OPENAI_API_KEY
-      ? await callOpenAI(system, user)
-      : await callGemini(user, schema);
-
+    const data = process.env.OPENAI_API_KEY ? await callOpenAI(system, user) : await callGemini(user, schema);
     res.json({ success: true, data });
   } catch (error: any) {
-    console.error("Evaluate report error:", error);
+    console.error("Report error:", error);
     res.status(500).json({ success: false, error: error.message });
   }
 });
