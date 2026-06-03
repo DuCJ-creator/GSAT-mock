@@ -80,7 +80,7 @@ export default function ProgressReportView({ report, suite, onRestart, onGoToWor
       return suite.clozeSuite.questions.find(q => String(q.gapNumber) === item.questionNumberOrName)?.explanation || "無獨立解析";
     }
     if (item.section === "blankMatching" && suite.blankMatchingSuite) {
-      const idx = parseInt(item.questionNumberOrName) - 21;
+      const idx = parseInt(item.questionNumberOrName) - 16;
       return suite.blankMatchingSuite.explanations[idx] || "無獨立解析";
     }
     if (item.section === "reading" && suite.readingPassages) {
@@ -329,13 +329,13 @@ export default function ProgressReportView({ report, suite, onRestart, onGoToWor
               </div>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                 {suite.blankMatchingSuite.answers.map((ans, idx) => {
-                  const detail = report.details.find(d => d.section === "blankMatching" && d.questionNumberOrName === String(idx + 21));
+                  const detail = report.details.find(d => d.section === "blankMatching" && d.questionNumberOrName === String(idx + 16));
                   const isCorrect = detail?.isCorrect;
                   const optText = normalizeOptions(suite.blankMatchingSuite!.options).find(o => o.startsWith(`(${ans})`)) || `(${ans})`;
                   return (
                     <div key={idx} className={`p-3 rounded-xl border text-xs ${isCorrect ? "border-teal-200 bg-teal-50/30" : "border-rose-200 bg-rose-50/30"}`}>
                       <div className="flex justify-between items-center mb-1">
-                        <span className="font-bold text-stone-800">Blank __ {idx + 21} __</span>
+                        <span className="font-bold text-stone-800">Blank __ {idx + 16} __</span>
                         <span className={`font-mono font-bold ${isCorrect ? "text-teal-700" : "text-rose-700"}`}>
                           ({ans}) {optText} {isCorrect ? "✓" : `✗ You: (${detail?.userAnswer || "—"})`}
                         </span>
