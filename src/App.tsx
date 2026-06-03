@@ -291,13 +291,13 @@ export default function App() {
     // 1. Vocab
     if (examSuite.vocabQuestions) {
       examSuite.vocabQuestions.forEach((q) => {
-        const userAns = session.answers.vocab[q.id] || "";
+        const userAns = session.answers.vocab[`vocab_${qIndex}`] || "";
         const isCorrect = userAns === normalizeAnswer(q.correctAnswer);
         if (isCorrect) summary.vocab.correct++;
         summary.vocab.total++;
         reportDetails.push({
           section: "vocab",
-          questionNumberOrName: q.id,
+          questionNumberOrName: `vocab_${qIndex}`,
           isCorrect,
           userAnswer: userAns,
           correctAnswer: normalizeAnswer(q.correctAnswer),
@@ -820,7 +820,7 @@ export default function App() {
                     </div>
                     <div className="space-y-8">
                       {examSuite.vocabQuestions.map((q, qIndex) => {
-                        const userSelectedChoice = session.answers.vocab[q.id] || "";
+                      const userSelectedChoice = session.answers.vocab[`vocab_${qIndex}`] || "";
                         return (
                           <div key={q.id} className="space-y-3 text-sm p-4 hover:bg-stone-50/50 rounded-xl transition border border-transparent hover:border-stone-150">
                             <span className="font-mono text-xs font-bold text-amber-800 bg-amber-50 rounded-lg px-2 py-0.5">Question {qIndex + 1}</span>
@@ -832,7 +832,7 @@ export default function App() {
                                 return (
                                   <button
                                     key={letter} type="button"
-                                    onClick={() => setSession(prev => ({ ...prev, answers: { ...prev.answers, vocab: { ...prev.answers.vocab, [q.id]: letter } } }))}
+                                    onClick={() => setSession(prev => ({ ...prev, answers: { ...prev.answers, vocab: { ...prev.answers.vocab, [`vocab_${qIndex}`]: letter } } }))}
                                     className={`py-3 px-4 rounded-xl text-xs text-left font-semibold transition border ${isSelected ? "bg-teal-700 text-white border-teal-700 shadow-sm" : "bg-white text-stone-700 border-stone-250 hover:bg-stone-50"}`}
                                     id={`player-vocab-q-${qIndex}-opt-${letter}`}
                                   >
