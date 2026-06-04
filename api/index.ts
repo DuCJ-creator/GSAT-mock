@@ -108,41 +108,50 @@ app.post("/api/generate-vocab", async (req, res) => {
 The correct answer positions have been pre-assigned for you. You MUST place the correct answer at exactly these positions:
 ${assignmentList}
 
-This means for Q1 the correct word goes in position ${answerKey[0]}, for Q2 in position ${answerKey[1]}, etc.
+MANDATORY PROCESS — follow these steps for EACH question:
 
-QUALITY RULES for each question:
+STEP 1: Identify the word to test and its part of speech (noun/verb/adjective/adverb).
 
-RULE 1 — PART OF SPEECH MUST MATCH:
-- Identify the POS of the correct answer word (noun, verb, adjective, adverb).
-- The sentence structure MUST grammatically require that exact POS at the blank position.
-- BAD: "The ______ of the project will determine its success." with options (A) economic (B) annual (C) eventual (D) flexible — all options are adjectives but the blank needs a noun (outcome/quality/etc.).
-- GOOD: "The scientist published her ______ findings in a leading academic journal." — blank needs an adjective; options are all adjectives but only one fits the meaning.
-- Before writing the sentence, decide: what POS does the blank require? Then make sure ALL 4 options are that same POS.
+STEP 2: Write a sentence where:
+- The blank position REQUIRES that exact part of speech grammatically.
+- The surrounding context (collocations, subject matter, grammar structure) makes ONLY the correct word fit.
+- The sentence is factually accurate, professionally written, and natural academic English.
+- The sentence could appear in a real GSAT exam paper without modification.
 
-RULE 2 — EXACTLY ONE CORRECT ANSWER:
-- After writing the sentence, mentally test every distractor: can it fill the blank and still produce a grammatically correct, meaningful sentence? If yes, rewrite the sentence with tighter constraints.
-- BAD: "The detective was determined to catch the ______ who committed the crime." — criminal/suspect/murderer/gangster all work.
-- GOOD: "The biologist's ______ of the newly discovered species took three years of field research to complete." — only "identification" or similar specific noun fits; generic words like "study" or "work" are blocked by the collocation "of the newly discovered species."
+STEP 3: Choose 3 distractors that are:
+- The SAME part of speech as the correct answer.
+- Plausible at first glance but clearly wrong when the full sentence context is considered.
+- NOT interchangeable with the correct answer in this specific sentence.
 
-RULE 3 — PROFESSIONAL STANDARD:
-- Every sentence must be factually accurate, natural English, and appropriate for academic use.
-- No slang, no culturally inappropriate content, no absurd or implausible scenarios.
-- Sentences should reflect real-world academic, professional, or scientific contexts.
+STEP 4: Test every distractor by mentally substituting it into the blank:
+- If ANY distractor produces a grammatically correct, meaningfully plausible sentence → the question FAILS.
+- Rewrite the sentence with tighter collocational or contextual constraints until all distractors fail this test.
 
-RULE 4 — PLACE CORRECT ANSWER AT PRE-ASSIGNED POSITION:
-- For Q1, the correct word must appear as option ${answerKey[0]} in the options array.
-- For Q2, the correct word must appear as option ${answerKey[1]}. And so on.
-- "correctAnswer" field must exactly match the pre-assigned letter for that question number.
+NATURALNESS STANDARDS — every sentence must pass ALL of these:
+- Grammatically correct with NO errors.
+- Factually accurate (e.g. do not say scientists "invade" cells; use "penetrate" or "infect").
+- Contextually coherent — the sentence topic must logically call for the tested word.
+- Free of awkward phrasing, unnatural word order, or implausible scenarios.
+- Appropriate for academic use — no slang, colloquialisms, or culturally inappropriate content.
+
+BAD example (fails multiple standards):
+"The ______ of the project will determine its success." with options (A) economic (B) annual (C) eventual (D) flexible
+— FAILS because: blank needs a noun but all options are adjectives; multiple options could arguably fit.
+
+GOOD example (passes all standards):
+"The marine biologist spent a decade documenting the ______ patterns of deep-sea creatures that had never been observed before."
+with options (A) migration (B) flexible (C) evaluate (D) splendid
+— PASSES because: blank clearly needs a noun (patterns of X); "migration patterns" is a natural collocation; "flexible/evaluate/splendid" are wrong POS or clearly don't collocate.
 
 FORMAT:
 - "question": complete sentence with exactly "______" (six underscores) as the blank.
-- "options": ["(A) word", "(B) word", "(C) word", "(D) word"] — single words only, all same POS.
-- "correctAnswer": bare letter matching the pre-assigned position — NO parentheses.
+- "options": ["(A) word", "(B) word", "(C) word", "(D) word"] — single words only, ALL same POS.
+- "correctAnswer": the pre-assigned bare letter for that question number — NO parentheses.
 - "wordTested": the correct answer word.
-- "explanation": Traditional Chinese — why the correct word fits, why each distractor does not.
+- "explanation": Traditional Chinese — explain why the correct word fits semantically and grammatically, and why each distractor specifically fails in this sentence.
 - "id": "v1" through "v10".
 
-FINAL CHECK before returning: the array must have EXACTLY 10 items, no more, no less. Count them.
+FINAL CHECK: The array must contain EXACTLY 10 items. Count them before returning. Remove any item beyond 10.
 
 Return JSON: { "vocabQuestions": [ ...EXACTLY 10 items... ] }`;
 
@@ -201,16 +210,31 @@ app.post("/api/generate-cloze", async (req, res) => {
 
 Pre-assigned correct answer positions: ${assignmentList}
 
-QUALITY RULES:
-1. Write a natural, engaging 150-180 word article on an interesting topic (science, culture, nature, psychology, history). It must read like a real magazine article, NOT a textbook exercise.
-2. Place EXACTLY 5 blanks inline as: __ 11 __, __ 12 __, __ 13 __, __ 14 __, __ 15 __
-3. Each blank tests ONE specific linguistic item: vocabulary, grammar, collocation, discourse connector, or idiom.
-4. For each blank, write 4 options. ONLY ONE option is correct. The other 3 must be clearly wrong in context.
-5. Options may be single words OR short phrases (2-3 words).
-6. Place the correct option at the pre-assigned letter position for each gap.
-7. "correctAnswer": the pre-assigned bare letter (A/B/C/D) — NO parentheses.
-8. "explanation": Traditional Chinese explanation per gap.
-9. VERIFY before returning: count the blanks in the passage — must be EXACTLY 5, numbered __ 11 __ through __ 15 __.
+MANDATORY PROCESS:
+
+STEP 1: Choose an engaging, specific topic (e.g. a scientific discovery, a cultural practice, a psychological finding, a historical event). Write a 150-180 word article that reads like a real magazine piece.
+
+STEP 2: Identify 5 natural positions in the passage for blanks. Each blank should test a different linguistic category:
+- 1-2 vocabulary items (specific word meaning in context)
+- 1-2 grammar or collocation items (preposition, verb form, fixed phrase)
+- 1 discourse connector (transition word or phrase connecting ideas)
+
+STEP 3: For each blank, write 4 options and place the correct one at the pre-assigned letter position.
+- Options may be single words OR short phrases (2-3 words).
+- Test each distractor: substituting it must produce either a grammatically wrong or semantically implausible sentence.
+- If any distractor passes the test, adjust the surrounding sentence context to eliminate the ambiguity.
+
+STEP 4: Number blanks inline as __ 11 __, __ 12 __, __ 13 __, __ 14 __, __ 15 __ within the passage text.
+
+NATURALNESS STANDARDS:
+- The passage must be factually accurate and professionally written.
+- Every sentence (including those with blanks filled in) must be natural English.
+- The passage must flow coherently as a whole — ideas connect logically between sentences.
+- No awkward phrasing, no implausible scenarios, no factual errors.
+
+FORMAT per question: gapNumber (integer 11-15), options (4 strings), correctAnswer (bare letter), category, explanation (Traditional Chinese).
+
+VERIFY before returning: passage contains EXACTLY 5 blank tokens __ 11 __ through __ 15 __.
 
 Return JSON: { "clozeSuite": { "passage": "...", "questions": [...exactly 5 items...] } }`;
 
@@ -264,26 +288,46 @@ app.post("/api/generate-matching", async (req, res) => {
 
     const user = `Generate 1 GSAT-style blank matching passage (文意選填) referencing vocabulary: ${vocabString}
 
-CRITICAL COUNTING REQUIREMENT:
-- The passage MUST contain EXACTLY 10 blanks. Not 7, not 8, not 9 — EXACTLY 10.
-- The blanks MUST be numbered inline as: __ 16 __, __ 17 __, __ 18 __, __ 19 __, __ 20 __, __ 21 __, __ 22 __, __ 23 __, __ 24 __, __ 25 __
-- Before writing the passage, plan 10 specific positions where blanks will appear.
-- After writing the passage, count every blank token (__ N __) — if the count is not exactly 10, rewrite.
+MANDATORY PROCESS — follow these steps in order:
 
-QUALITY RULES:
-1. Write a natural, engaging 220-260 word article. Must read like a real article, NOT a textbook exercise.
-2. "options": EXACTLY 10 candidate strings labeled (A) through (J). Mix single words and 2-3 word phrases. Include deceptive pairs (e.g. two similar verbs, two similar nouns) to challenge students.
-3. "answers": EXACTLY 10 letters, one per blank in order from blank 16 to blank 25. Each letter A through J used EXACTLY once.
-4. "explanations": EXACTLY 10 Traditional Chinese explanation strings, one per blank (16 through 25).
-5. Each blank must have EXACTLY ONE correct answer. The other 9 options must not fit that blank grammatically or semantically.
-6. SELF-CHECK before returning:
-   - Count blanks in passage: must equal 10.
-   - Count options array: must equal 10.
-   - Count answers array: must equal 10.
-   - Count explanations array: must equal 10.
-   - Verify each letter A-J appears exactly once in answers.
+STEP 1: Plan your 10 blanks BEFORE writing the passage.
+List exactly 10 words you will blank out, one for each position 16-25:
+- Blank 16: [word] — part of speech: [POS]
+- Blank 17: [word] — part of speech: [POS]
+- Blank 18: [word] — part of speech: [POS]
+- Blank 19: [word] — part of speech: [POS]
+- Blank 20: [word] — part of speech: [POS]
+- Blank 21: [word] — part of speech: [POS]
+- Blank 22: [word] — part of speech: [POS]
+- Blank 23: [word] — part of speech: [POS]
+- Blank 24: [word] — part of speech: [POS]
+- Blank 25: [word] — part of speech: [POS]
 
-Return JSON: { "blankMatchingSuite": { "passage": "...", "options": [...exactly 10...], "answers": [...exactly 10 letters A-J...], "explanations": [...exactly 10...] } }`;
+STEP 2: Write the passage (220-260 words) incorporating all 10 blanked words naturally.
+- Replace each planned word with its blank token: __ 16 __, __ 17 __, ..., __ 25 __
+- Every blank must fit naturally — the surrounding sentence must be grammatically correct and meaningful both with the answer and within the passage context.
+- The passage must read like a real magazine article on an interesting topic (science, culture, nature, psychology, history, technology).
+- Each sentence containing a blank must provide enough context to make the correct answer unambiguous, but not so obvious that the blank is trivial.
+
+STEP 3: Create the 10 candidate options (A)-(J).
+- Include all 10 answer words, each labeled (A) through (J) in random order.
+- Add deceptive distractors only if you have fewer than 10 answer words — each distractor must be clearly wrong for all 10 blanks due to grammar or meaning.
+- Mix single words and short 2-3 word phrases.
+- Include similar-looking pairs to challenge students (e.g. two verbs with different collocations, two nouns from similar semantic fields).
+
+STEP 4: Build the answers array.
+- "answers": exactly 10 letters [A-J], one per blank in order from blank 16 to blank 25.
+- Each letter A through J appears EXACTLY once.
+
+STEP 5: Write 10 Traditional Chinese explanations, one per blank (16-25).
+
+QUALITY STANDARDS:
+- Every sentence must be natural, factually accurate, and professionally written English.
+- No sentence should be awkward, implausible, or culturally inappropriate.
+- The correct answer for each blank must be the ONLY option that fits — test each of the other 9 options against the blank to confirm they do not fit grammatically or semantically.
+- FINAL COUNT CHECK: passage must contain exactly the tokens __ 16 __, __ 17 __, __ 18 __, __ 19 __, __ 20 __, __ 21 __, __ 22 __, __ 23 __, __ 24 __, __ 25 __ — all 10, no more, no less.
+
+Return JSON: { "blankMatchingSuite": { "passage": "...", "options": [...exactly 10 strings (A)-(J)...], "answers": [...exactly 10 letters A-J...], "explanations": [...exactly 10 Traditional Chinese strings...] } }`;
 
     const schema = {
       type: Type.OBJECT,
@@ -333,17 +377,31 @@ app.post("/api/generate-reading", async (req, res) => {
 
 Pre-assigned correct answer positions: ${keyDescriptions}
 
-QUALITY RULES:
-1. For EACH level [${levels.join(", ")}], write exactly 1 passage (250-300 words) on a genuinely interesting topic.
-2. The passage must read like a real magazine or academic article — engaging, natural, informative.
-3. Each passage has EXACTLY 4 comprehension questions testing different skills: main idea, specific detail, vocabulary in context, inference or title.
-4. "options": exactly 4 strings per question. Options can be full sentences or short phrases.
-   Format: ["(A) ...", "(B) ...", "(C) ...", "(D) ..."]
-5. "correctAnswer": bare letter matching the pre-assigned position — NO parentheses.
-6. Place each correct answer at the pre-assigned position for that question number.
-7. Each question must have EXACTLY ONE unambiguously correct answer supported directly by the passage text.
-8. "explanation": Traditional Chinese explanation citing the key evidence sentence from the passage.
-9. Return EXACTLY ${levels.length} passage(s).
+MANDATORY PROCESS for each passage:
+
+STEP 1: Choose a specific, genuinely interesting topic appropriate for the level. Write 250-300 words that read like a real academic or magazine article — engaging, informative, coherent.
+
+STEP 2: Write 4 comprehension questions testing different skills:
+- Q1: Main idea or title selection
+- Q2: Specific detail (directly stated in the passage)
+- Q3: Vocabulary in context (meaning of a word/phrase as used in the passage)
+- Q4: Inference or author's purpose
+
+STEP 3: For each question, write 4 options and place the correct one at the pre-assigned letter position.
+- Each correct answer must be directly and unambiguously supported by the passage text.
+- Each distractor must be clearly wrong — either contradicted by the passage, not mentioned, or a plausible-sounding misreading.
+- Options can be full sentences or short phrases as appropriate.
+
+NATURALNESS AND ACCURACY STANDARDS:
+- Passage content must be factually accurate.
+- Every sentence must be natural, professionally written English.
+- Questions must be clearly worded with no ambiguity.
+- Correct answers must be the ONLY defensible choice given the passage text.
+- Distractors must not be accidentally correct due to general knowledge outside the passage.
+
+FORMAT: level, title, passage (250-300 words), questions (exactly 4 per passage with id/question/options/correctAnswer/explanation in Traditional Chinese).
+
+Return EXACTLY ${levels.length} passage(s).
 
 Return JSON: { "readingPassages": [...exactly ${levels.length} passage(s)...] }`;
 
