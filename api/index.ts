@@ -41,10 +41,10 @@ async function callOpenAI(system: string, user: string): Promise<any> {
     model,
     messages: [
       { role: "system", content: system },
-      { role: "user", content: user + "\n\nCRITICAL: Return ONLY a valid JSON object. No markdown, no explanation outside JSON." }
+      { role: "user", content: user + "\n\nCRITICAL: Return ONLY a valid JSON object. No markdown, no preamble." }
     ],
     response_format: { type: "json_object" },
-    temperature: 0.3,
+    temperature: 0.7,
   });
   return JSON.parse((response.choices[0].message.content || "").trim());
 }
@@ -58,11 +58,30 @@ async function callGemini(prompt: string, schema: any): Promise<any> {
       systemInstruction: "You are Tr. Shirley Du, an elite GSAT English educator in Taiwan. Return ONLY valid JSON matching the schema exactly.",
       responseMimeType: "application/json",
       responseSchema: schema,
-      temperature: 0.3,
+      temperature: 0.7,
     },
   });
   if (!response.text) throw new Error("Empty response from Gemini.");
   return JSON.parse(response.text.trim());
+}
+
+// Randomly shuffle a small answer key for pre-assignment
+function makeAnswerKey(n: number, letters: string[]): string[] {
+  const key: string[] = [];
+  const perLetter = Math.floor(n / letters.length);
+  const pool: string[] = [];
+  for (const l of letters) {
+    for (let i = 0; i < perLetter; i++) pool.push(l);
+  }
+  // Fill remainder
+  let i = 0;
+  while (pool.length < n) { pool.push(letters[i++ % letters.length]); }
+  // Fisher-Yates shuffle
+  for (let j = pool.length - 1; j > 0; j--) {
+    const k = Math.floor(Math.random() * (j + 1));
+    [pool[j], pool[k]] = [pool[k], pool[j]];
+  }
+  return pool.slice(0, n);
 }
 
 // ── Health ────────────────────────────────────────────────────
@@ -75,36 +94,57 @@ app.post("/api/generate-vocab", async (req, res) => {
     verifyApiKeys();
 
     const vocabString = vocabList?.length > 0
-      ? vocabList.map((vw: any) => `"${vw.word}" (${vw.pos || ""})`).join(", ")
+      ? vocabList.map((vw: any) => `"${vw.word}" (POS: ${vw.pos || "unspecified"})`).join(", ")
       : "standard GSAT Level 3-6 vocabulary";
 
-    const system = `You are an expert GSAT English question writer for Taiwan high school students. You write precise, unambiguous multiple-choice vocabulary questions.`;
+    // Pre-assign answer positions server-side so AI cannot default to A
+    const answerKey = makeAnswerKey(10, ["A","B","C","D"]);
+    const assignmentList = answerKey.map((ans, i) => `Q${i+1} → ${ans}`).join(", ");
+
+    const system = `You are an expert GSAT English question writer for Taiwan high school students. You write precise, professional, unambiguous multiple-choice vocabulary questions at GSAT difficulty level.`;
 
     const user = `Generate EXACTLY 10 GSAT-style vocabulary fill-in-the-blank questions using words from: ${vocabString}
 
-STEP 1 — BEFORE writing any questions, decide the correct answer position for all 10 questions at once:
-- Randomly assign correctAnswer values so that A, B, C, D each appear 2-3 times across the 10 questions.
-- The distribution must be unpredictable — do NOT use any repeating pattern like ABCDABCD.
-- A valid example assignment: [B, A, D, C, B, D, A, C, D, B] — each letter appears 2-3 times, no obvious pattern.
-- An invalid example: [A, A, A, B, B, C, C, D, D, A] — too many As, predictable clusters.
-- Write this assignment down internally first, then build each question so its correct word lands on the pre-assigned letter position in the options array.
+The correct answer positions have been pre-assigned for you. You MUST place the correct answer at exactly these positions:
+${assignmentList}
 
-STEP 2 — For each question, follow these quality rules:
-1. The sentence must have EXACTLY ONE word that correctly fills the blank.
-   - Test each distractor: if ANY distractor could also reasonably fill the blank, the question FAILS — add more specific context.
-   - BAD: "The detective caught the ______ who committed the crime." — gangster/murderer/criminal all fit.
-   - GOOD: "The ______ of the ancient temple drew thousands of visitors, making it the most-visited site in the region." — only "landmark" fits; "monument" and "ruin" would need different collocations.
-   - Always add collocations, surrounding grammar, or topic constraints so ONLY the correct word fits.
-2. The sentence MUST NOT contain the answer word or any morphological variant of it.
-3. Distractors must be same part of speech but clearly wrong in context.
-4. Each "question" is a complete English sentence with "______" (six underscores) as the blank.
-5. "options": exactly 4 strings ["(A) word", "(B) word", "(C) word", "(D) word"] — single words only. Place the correct word at the pre-assigned letter position.
-6. "correctAnswer": the pre-assigned bare letter (A/B/C/D) — NO parentheses.
-7. "explanation": Traditional Chinese explanation of why the answer is correct and why each distractor is wrong.
+This means for Q1 the correct word goes in position ${answerKey[0]}, for Q2 in position ${answerKey[1]}, etc.
 
-STEP 3 — Before returning, verify: count how many times A, B, C, D appear as correctAnswer. Each must be 2 or 3. If not, rewrite the affected questions.
+QUALITY RULES for each question:
 
-Return JSON: { "vocabQuestions": [ ...exactly 10 items... ] }`;
+RULE 1 — PART OF SPEECH MUST MATCH:
+- Identify the POS of the correct answer word (noun, verb, adjective, adverb).
+- The sentence structure MUST grammatically require that exact POS at the blank position.
+- BAD: "The ______ of the project will determine its success." with options (A) economic (B) annual (C) eventual (D) flexible — all options are adjectives but the blank needs a noun (outcome/quality/etc.).
+- GOOD: "The scientist published her ______ findings in a leading academic journal." — blank needs an adjective; options are all adjectives but only one fits the meaning.
+- Before writing the sentence, decide: what POS does the blank require? Then make sure ALL 4 options are that same POS.
+
+RULE 2 — EXACTLY ONE CORRECT ANSWER:
+- After writing the sentence, mentally test every distractor: can it fill the blank and still produce a grammatically correct, meaningful sentence? If yes, rewrite the sentence with tighter constraints.
+- BAD: "The detective was determined to catch the ______ who committed the crime." — criminal/suspect/murderer/gangster all work.
+- GOOD: "The biologist's ______ of the newly discovered species took three years of field research to complete." — only "identification" or similar specific noun fits; generic words like "study" or "work" are blocked by the collocation "of the newly discovered species."
+
+RULE 3 — PROFESSIONAL STANDARD:
+- Every sentence must be factually accurate, natural English, and appropriate for academic use.
+- No slang, no culturally inappropriate content, no absurd or implausible scenarios.
+- Sentences should reflect real-world academic, professional, or scientific contexts.
+
+RULE 4 — PLACE CORRECT ANSWER AT PRE-ASSIGNED POSITION:
+- For Q1, the correct word must appear as option ${answerKey[0]} in the options array.
+- For Q2, the correct word must appear as option ${answerKey[1]}. And so on.
+- "correctAnswer" field must exactly match the pre-assigned letter for that question number.
+
+FORMAT:
+- "question": complete sentence with exactly "______" (six underscores) as the blank.
+- "options": ["(A) word", "(B) word", "(C) word", "(D) word"] — single words only, all same POS.
+- "correctAnswer": bare letter matching the pre-assigned position — NO parentheses.
+- "wordTested": the correct answer word.
+- "explanation": Traditional Chinese — why the correct word fits, why each distractor does not.
+- "id": "v1" through "v10".
+
+FINAL CHECK before returning: the array must have EXACTLY 10 items, no more, no less. Count them.
+
+Return JSON: { "vocabQuestions": [ ...EXACTLY 10 items... ] }`;
 
     const schema = {
       type: Type.OBJECT,
@@ -128,7 +168,13 @@ Return JSON: { "vocabQuestions": [ ...exactly 10 items... ] }`;
       required: ["vocabQuestions"]
     };
 
-    const data = process.env.OPENAI_API_KEY ? await callOpenAI(system, user) : await callGemini(user, schema);
+    let data = process.env.OPENAI_API_KEY ? await callOpenAI(system, user) : await callGemini(user, schema);
+
+    // Hard cap: never return more than 10 questions
+    if (data.vocabQuestions && data.vocabQuestions.length > 10) {
+      data.vocabQuestions = data.vocabQuestions.slice(0, 10);
+    }
+
     res.json({ success: true, data });
   } catch (error: any) {
     console.error("Vocab error:", error);
@@ -146,19 +192,25 @@ app.post("/api/generate-cloze", async (req, res) => {
       ? vocabList.map((vw: any) => `"${vw.word}"`).join(", ")
       : "standard GSAT vocabulary";
 
+    const answerKey = makeAnswerKey(5, ["A","B","C","D"]);
+    const assignmentList = answerKey.map((ans, i) => `Gap ${11+i} → ${ans}`).join(", ");
+
     const system = `You are an expert GSAT English cloze passage writer for Taiwan high school exams.`;
 
     const user = `Generate 1 GSAT-style cloze passage (綜合測驗) referencing vocabulary: ${vocabString}
 
+Pre-assigned correct answer positions: ${assignmentList}
+
 QUALITY RULES:
 1. Write a natural, engaging 150-180 word article on an interesting topic (science, culture, nature, psychology, history). It must read like a real magazine article, NOT a textbook exercise.
-2. Place EXACTLY 5 blanks numbered inline as: __ 11 __, __ 12 __, __ 13 __, __ 14 __, __ 15 __
-3. Each blank tests ONE specific thing: vocabulary, grammar, collocation, discourse connector, or idiom.
-4. For each blank, write 4 options. ONLY ONE option must be correct. The other 3 must be clearly wrong in context (wrong grammar, wrong collocation, or wrong meaning). Options may be words OR short phrases.
-5. "correctAnswer": bare letter A/B/C/D — NO parentheses.
-6. ANSWER DISTRIBUTION: Before writing the 5 gaps, randomly pre-assign correctAnswer values for gaps 11-15 so that A, B, C, D are spread unpredictably (e.g. [C, A, D, B, C] or [B, D, A, C, B]). Then write each gap so its correct option lands on the pre-assigned letter. Do NOT default all answers to A.
-7. Verify: the passage has EXACTLY 5 inline blanks formatted as __ 11 __ through __ 15 __.
+2. Place EXACTLY 5 blanks inline as: __ 11 __, __ 12 __, __ 13 __, __ 14 __, __ 15 __
+3. Each blank tests ONE specific linguistic item: vocabulary, grammar, collocation, discourse connector, or idiom.
+4. For each blank, write 4 options. ONLY ONE option is correct. The other 3 must be clearly wrong in context.
+5. Options may be single words OR short phrases (2-3 words).
+6. Place the correct option at the pre-assigned letter position for each gap.
+7. "correctAnswer": the pre-assigned bare letter (A/B/C/D) — NO parentheses.
 8. "explanation": Traditional Chinese explanation per gap.
+9. VERIFY before returning: count the blanks in the passage — must be EXACTLY 5, numbered __ 11 __ through __ 15 __.
 
 Return JSON: { "clozeSuite": { "passage": "...", "questions": [...exactly 5 items...] } }`;
 
@@ -212,17 +264,26 @@ app.post("/api/generate-matching", async (req, res) => {
 
     const user = `Generate 1 GSAT-style blank matching passage (文意選填) referencing vocabulary: ${vocabString}
 
-QUALITY RULES:
-1. Write a natural, engaging 200-250 word article. Must read like a real article, NOT a textbook exercise.
-2. Place EXACTLY 10 blanks numbered inline as __ 16 __, __ 17 __, __ 18 __, __ 19 __, __ 20 __, __ 21 __, __ 22 __, __ 23 __, __ 24 __, __ 25 __
-3. Count the blanks in your passage before responding — there must be EXACTLY 10.
-4. "options": EXACTLY 10 candidate strings (A) through (J). Mix single words and 2-3 word phrases. Make options deceptive by including similar parts of speech.
-5. "answers": EXACTLY 10 letters (one per blank 16-25). Each letter A-J used EXACTLY once.
-6. "explanations": EXACTLY 10 Traditional Chinese explanations (one per blank).
-7. Each blank must have EXACTLY ONE correct answer from the options. The other 9 options must not fit that blank grammatically or semantically.
-8. Verify counts: 10 blanks in passage, 10 options, 10 answers, 10 explanations.
+CRITICAL COUNTING REQUIREMENT:
+- The passage MUST contain EXACTLY 10 blanks. Not 7, not 8, not 9 — EXACTLY 10.
+- The blanks MUST be numbered inline as: __ 16 __, __ 17 __, __ 18 __, __ 19 __, __ 20 __, __ 21 __, __ 22 __, __ 23 __, __ 24 __, __ 25 __
+- Before writing the passage, plan 10 specific positions where blanks will appear.
+- After writing the passage, count every blank token (__ N __) — if the count is not exactly 10, rewrite.
 
-Return JSON: { "blankMatchingSuite": { "passage": "...", "options": [...10...], "answers": [...10 letters A-J...], "explanations": [...10...] } }`;
+QUALITY RULES:
+1. Write a natural, engaging 220-260 word article. Must read like a real article, NOT a textbook exercise.
+2. "options": EXACTLY 10 candidate strings labeled (A) through (J). Mix single words and 2-3 word phrases. Include deceptive pairs (e.g. two similar verbs, two similar nouns) to challenge students.
+3. "answers": EXACTLY 10 letters, one per blank in order from blank 16 to blank 25. Each letter A through J used EXACTLY once.
+4. "explanations": EXACTLY 10 Traditional Chinese explanation strings, one per blank (16 through 25).
+5. Each blank must have EXACTLY ONE correct answer. The other 9 options must not fit that blank grammatically or semantically.
+6. SELF-CHECK before returning:
+   - Count blanks in passage: must equal 10.
+   - Count options array: must equal 10.
+   - Count answers array: must equal 10.
+   - Count explanations array: must equal 10.
+   - Verify each letter A-J appears exactly once in answers.
+
+Return JSON: { "blankMatchingSuite": { "passage": "...", "options": [...exactly 10...], "answers": [...exactly 10 letters A-J...], "explanations": [...exactly 10...] } }`;
 
     const schema = {
       type: Type.OBJECT,
@@ -260,19 +321,28 @@ app.post("/api/generate-reading", async (req, res) => {
       ? vocabList.map((vw: any) => `"${vw.word}"`).join(", ")
       : "standard GSAT vocabulary";
 
+    // Pre-assign answer positions for each passage
+    const passageKeys = levels.map(() => makeAnswerKey(4, ["A","B","C","D"]));
+    const keyDescriptions = levels.map((lvl: string, i: number) =>
+      `${lvl} passage: Q1→${passageKeys[i][0]}, Q2→${passageKeys[i][1]}, Q3→${passageKeys[i][2]}, Q4→${passageKeys[i][3]}`
+    ).join("; ");
+
     const system = `You are an expert GSAT English reading comprehension writer for Taiwan high school exams.`;
 
     const user = `Generate reading comprehension passages for levels: ${levels.join(", ")} using vocabulary: ${vocabString}
+
+Pre-assigned correct answer positions: ${keyDescriptions}
 
 QUALITY RULES:
 1. For EACH level [${levels.join(", ")}], write exactly 1 passage (250-300 words) on a genuinely interesting topic.
 2. The passage must read like a real magazine or academic article — engaging, natural, informative.
 3. Each passage has EXACTLY 4 comprehension questions testing different skills: main idea, specific detail, vocabulary in context, inference or title.
-4. "options": exactly 4 strings per question: ["(A) ...", "(B) ...", "(C) ...", "(D) ..."]. Options can be full sentences or short phrases.
-5. "correctAnswer": bare letter A/B/C/D — NO parentheses.
-6. ANSWER DISTRIBUTION: Before writing the questions for each passage, randomly pre-assign correctAnswer values so A, B, C, D each appear at least once across the 4 questions (e.g. [C, A, D, B]). Then write each question so its correct option lands on the pre-assigned letter. Do NOT default all answers to A.
-7. Each question must have EXACTLY ONE unambiguously correct answer supported by the passage text.
-8. "explanation": Traditional Chinese explanation with the key evidence sentence from the passage translated.
+4. "options": exactly 4 strings per question. Options can be full sentences or short phrases.
+   Format: ["(A) ...", "(B) ...", "(C) ...", "(D) ..."]
+5. "correctAnswer": bare letter matching the pre-assigned position — NO parentheses.
+6. Place each correct answer at the pre-assigned position for that question number.
+7. Each question must have EXACTLY ONE unambiguously correct answer supported directly by the passage text.
+8. "explanation": Traditional Chinese explanation citing the key evidence sentence from the passage.
 9. Return EXACTLY ${levels.length} passage(s).
 
 Return JSON: { "readingPassages": [...exactly ${levels.length} passage(s)...] }`;
