@@ -48,7 +48,7 @@ export default function WorksheetExport({ suite, onBack }: WorksheetExportProps)
     // Matching
     if (suite.blankMatchingSuite) {
       md += `### Part III: Blank Matching (文意選填)\n`;
-      md += `*Directions: Choose the correct word from the options below to fill in each blank (gaps 21–30). Use each option exactly once.*\n\n`;
+      md += `*Directions: Choose the correct word from the options below to fill in each blank (gaps 16–25). Use each option exactly once.*\n\n`;
       md += `Options:\n`;
       md += `   ${normalizeOptions(suite.blankMatchingSuite.options).join("   ")}\n\n`;
       md += `${suite.blankMatchingSuite.passage}\n\n`;
@@ -96,9 +96,9 @@ export default function WorksheetExport({ suite, onBack }: WorksheetExportProps)
 
     if (suite.blankMatchingSuite) {
       md += `#### Part III Solution:\n`;
-      md += `Blanks (21) through (30) Answers:\n`;
+      md += `Blanks (16) through (25) Answers:\n`;
       suite.blankMatchingSuite.answers.forEach((ans, idx) => {
-        md += `(${idx + 21}): ${ans}  (Word: ${normalizeOptions(suite.blankMatchingSuite!.options).find(o => o.startsWith(`(${ans})`)) || ans})\n`;
+        md += `(${idx + 16}): ${ans}  (Word: ${normalizeOptions(suite.blankMatchingSuite!.options).find(o => o.startsWith(`(${ans})`)) || ans})\n`;
         if (includeExplanations) md += `     解析: ${suite.blankMatchingSuite!.explanations[idx]}\n`;
       });
       md += `\n`;
@@ -243,16 +243,19 @@ export default function WorksheetExport({ suite, onBack }: WorksheetExportProps)
                   <p className="text-xs text-stone-500 italic">Directions: Choose the best word that grammatically and contextually makes the sentence meaningful.</p>
                 </div>
                 <div className="space-y-6 mt-4">
-                  {suite.vocabQuestions.map((q, idx) => (
-                    <div key={idx} id={`print-vocab-q-${idx}`} className="text-sm leading-relaxed">
-                      <p className="font-medium text-stone-950">{idx + 1}. {q.question}</p>
-                      <div className="vocab-options-row text-stone-700 italic mt-1.5 flex flex-wrap gap-x-8 gap-y-1 text-xs">
-                        {normalizeOptions(q.options).map((opt, optIdx) => (
-                          <span key={optIdx} className="inline-block whitespace-nowrap">{opt}</span>
-                        ))}
+                  {suite.vocabQuestions.map((q, idx) => {
+                    const questionText = q.question || q.prompt || q.sentence || q.stem || "";
+                    return (
+                      <div key={idx} id={`print-vocab-q-${idx}`} className="text-sm leading-relaxed">
+                        <p className="font-medium text-stone-950">{idx + 1}. {questionText || <span className="text-rose-400 italic">⚠ Question text missing</span>}</p>
+                        <div className="vocab-options-row text-stone-700 italic mt-1.5 flex flex-wrap gap-x-8 gap-y-1 text-xs">
+                          {normalizeOptions(q.options).map((opt, optIdx) => (
+                            <span key={optIdx} className="inline-block whitespace-nowrap">{opt}</span>
+                          ))}
+                        </div>
                       </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               </div>
             )}
@@ -268,16 +271,19 @@ export default function WorksheetExport({ suite, onBack }: WorksheetExportProps)
                   {suite.clozeSuite.passage}
                 </div>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
-                  {suite.clozeSuite.questions.map((q, idx) => (
-                    <div key={idx} id={`print-cloze-q-${idx}`} className="text-xs border-b border-dashed border-stone-100 pb-2">
-                      <span className="font-bold text-stone-900">({q.gapNumber})</span>
-                      <div className="flex flex-wrap gap-x-3 gap-y-1 mt-1 text-stone-700">
-                        {normalizeOptions(q.options).map((opt, optIdx) => (
-                          <span key={optIdx} className="whitespace-nowrap">{opt}</span>
-                        ))}
+                  {suite.clozeSuite.questions.map((q, idx) => {
+                    const gapNum = q.gapNumber ?? (11 + idx);
+                    return (
+                      <div key={idx} id={`print-cloze-q-${idx}`} className="text-xs border-b border-dashed border-stone-100 pb-2">
+                        <span className="font-bold text-stone-900">({gapNum})</span>
+                        <div className="flex flex-wrap gap-x-3 gap-y-1 mt-1 text-stone-700">
+                          {normalizeOptions(q.options).map((opt, optIdx) => (
+                            <span key={optIdx} className="whitespace-nowrap">{opt}</span>
+                          ))}
+                        </div>
                       </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               </div>
             )}
@@ -287,7 +293,7 @@ export default function WorksheetExport({ suite, onBack }: WorksheetExportProps)
               <div id="print-matching-section" className="space-y-4 print-page-break">
                 <div className="border-l-4 border-stone-800 pl-3">
                   <h2 className="text-lg font-bold font-display text-stone-900 uppercase">Part III: Blank Matching (學測文意選填)</h2>
-                  <p className="text-xs text-stone-500 italic">Directions: Match the ten candidate words below to fill in gaps 21–30. Use each candidate exactly once.</p>
+                  <p className="text-xs text-stone-500 italic">Directions: Match the ten candidate words below to fill in gaps 16–25. Use each candidate exactly once.</p>
                 </div>
                 <div className="bg-stone-100 border border-stone-200 rounded-xl p-4 text-center mt-4">
                   <span className="text-xs uppercase tracking-wider font-mono text-stone-500 block mb-2 font-bold">Candidate Option Table</span>
@@ -400,7 +406,7 @@ export default function WorksheetExport({ suite, onBack }: WorksheetExportProps)
                 <div className="bg-stone-50 rounded-xl p-4 border border-stone-200 grid grid-cols-2 sm:grid-cols-5 gap-3 font-mono font-bold text-stone-800 mb-3 text-center">
                   {suite.blankMatchingSuite.answers.map((ans, idx) => (
                     <div key={idx} className="bg-white border border-stone-300 py-1 rounded-md">
-                      Gap ({idx + 21}): {ans}
+                      Gap ({idx + 16}): {ans}
                     </div>
                   ))}
                 </div>
@@ -408,7 +414,7 @@ export default function WorksheetExport({ suite, onBack }: WorksheetExportProps)
                   <div className="space-y-2 pl-2">
                     {suite.blankMatchingSuite.explanations.map((expl, idx) => (
                       <p key={idx} className="text-stone-700">
-                        <strong>({idx + 21}) [{suite.blankMatchingSuite!.answers[idx]}]:</strong> {expl}
+                        <strong>({idx + 16}) [{suite.blankMatchingSuite!.answers[idx]}]:</strong> {expl}
                       </p>
                     ))}
                   </div>
