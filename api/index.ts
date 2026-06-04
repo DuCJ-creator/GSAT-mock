@@ -83,14 +83,22 @@ app.post("/api/generate-vocab", async (req, res) => {
     const user = `Generate EXACTLY 10 GSAT-style vocabulary fill-in-the-blank questions using words from: ${vocabString}
 
 QUALITY RULES — each question MUST pass all of these:
-1. The sentence must have EXACTLY ONE word that correctly fills the blank. If two or more options could reasonably fit, rewrite the sentence with more context clues.
+1. The sentence must have EXACTLY ONE word that correctly fills the blank.
+   - Test each distractor: if ANY distractor could also reasonably fill the blank, the question FAILS — add more specific context to eliminate ambiguity.
+   - Example of BAD question: "The detective caught the ______ who committed the crime." — both "gangster", "murderer", "criminal" all fit.
+   - Example of GOOD question: "The detective found the ______ at the scene — fingerprints, shoe marks, and hair samples — enough to solve the case." — only "evidence" fits.
+   - Always add enough contextual clues (collocations, surrounding grammar, topic constraints) so ONLY the correct word fits.
 2. The sentence MUST NOT contain the answer word or any morphological variant of it.
 3. The sentence must provide enough syntactic and semantic context to make the correct answer unambiguous.
 4. Distractors must be plausible words of the same part of speech, but semantically wrong in context.
 5. Each "question" is a complete natural English sentence with "______" (six underscores) as the blank.
 6. "options": exactly 4 strings ["(A) word", "(B) word", "(C) word", "(D) word"] — single words only.
 7. "correctAnswer": EXACTLY one bare letter with NO parentheses. 
-8. ANSWER DISTRIBUTION IS MANDATORY: Across all 10 questions, the correct answers MUST be distributed as follows — exactly 2 or 3 questions with answer A, exactly 2 or 3 with answer B, exactly 2 or 3 with answer C, exactly 2 or 3 with answer D. Count and verify before responding. Do NOT put more than 3 answers on the same letter.
+8. ANSWER DISTRIBUTION IS MANDATORY AND STRICTLY ENFORCED:
+   - Assign answers in this EXACT pattern: Q1=A, Q2=B, Q3=C, Q4=D, Q5=A, Q6=B, Q7=C, Q8=D, Q9=A or B or C or D (whichever is underrepresented), Q10=remaining letter.
+   - After writing all 10, count: A must appear 2-3 times, B must appear 2-3 times, C must appear 2-3 times, D must appear 2-3 times.
+   - If any letter appears more than 3 times, rewrite those questions until balanced.
+   - NEVER have more than 3 consecutive questions with the same answer.
 9. "explanation": Traditional Chinese explanation of why the answer is correct and why each distractor is wrong.
 
 Return JSON: { "vocabQuestions": [ ...exactly 10 items... ] }`;
