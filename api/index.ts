@@ -82,24 +82,27 @@ app.post("/api/generate-vocab", async (req, res) => {
 
     const user = `Generate EXACTLY 10 GSAT-style vocabulary fill-in-the-blank questions using words from: ${vocabString}
 
-QUALITY RULES — each question MUST pass all of these:
+STEP 1 — BEFORE writing any questions, decide the correct answer position for all 10 questions at once:
+- Randomly assign correctAnswer values so that A, B, C, D each appear 2-3 times across the 10 questions.
+- The distribution must be unpredictable — do NOT use any repeating pattern like ABCDABCD.
+- A valid example assignment: [B, A, D, C, B, D, A, C, D, B] — each letter appears 2-3 times, no obvious pattern.
+- An invalid example: [A, A, A, B, B, C, C, D, D, A] — too many As, predictable clusters.
+- Write this assignment down internally first, then build each question so its correct word lands on the pre-assigned letter position in the options array.
+
+STEP 2 — For each question, follow these quality rules:
 1. The sentence must have EXACTLY ONE word that correctly fills the blank.
-   - Test each distractor: if ANY distractor could also reasonably fill the blank, the question FAILS — add more specific context to eliminate ambiguity.
-   - Example of BAD question: "The detective caught the ______ who committed the crime." — both "gangster", "murderer", "criminal" all fit.
-   - Example of GOOD question: "The detective found the ______ at the scene — fingerprints, shoe marks, and hair samples — enough to solve the case." — only "evidence" fits.
-   - Always add enough contextual clues (collocations, surrounding grammar, topic constraints) so ONLY the correct word fits.
+   - Test each distractor: if ANY distractor could also reasonably fill the blank, the question FAILS — add more specific context.
+   - BAD: "The detective caught the ______ who committed the crime." — gangster/murderer/criminal all fit.
+   - GOOD: "The ______ of the ancient temple drew thousands of visitors, making it the most-visited site in the region." — only "landmark" fits; "monument" and "ruin" would need different collocations.
+   - Always add collocations, surrounding grammar, or topic constraints so ONLY the correct word fits.
 2. The sentence MUST NOT contain the answer word or any morphological variant of it.
-3. The sentence must provide enough syntactic and semantic context to make the correct answer unambiguous.
-4. Distractors must be plausible words of the same part of speech, but semantically wrong in context.
-5. Each "question" is a complete natural English sentence with "______" (six underscores) as the blank.
-6. "options": exactly 4 strings ["(A) word", "(B) word", "(C) word", "(D) word"] — single words only.
-7. "correctAnswer": EXACTLY one bare letter with NO parentheses. 
-8. ANSWER DISTRIBUTION IS MANDATORY AND STRICTLY ENFORCED:
-   - Assign answers in this EXACT pattern: Q1=A, Q2=B, Q3=C, Q4=D, Q5=A, Q6=B, Q7=C, Q8=D, Q9=A or B or C or D (whichever is underrepresented), Q10=remaining letter.
-   - After writing all 10, count: A must appear 2-3 times, B must appear 2-3 times, C must appear 2-3 times, D must appear 2-3 times.
-   - If any letter appears more than 3 times, rewrite those questions until balanced.
-   - NEVER have more than 3 consecutive questions with the same answer.
-9. "explanation": Traditional Chinese explanation of why the answer is correct and why each distractor is wrong.
+3. Distractors must be same part of speech but clearly wrong in context.
+4. Each "question" is a complete English sentence with "______" (six underscores) as the blank.
+5. "options": exactly 4 strings ["(A) word", "(B) word", "(C) word", "(D) word"] — single words only. Place the correct word at the pre-assigned letter position.
+6. "correctAnswer": the pre-assigned bare letter (A/B/C/D) — NO parentheses.
+7. "explanation": Traditional Chinese explanation of why the answer is correct and why each distractor is wrong.
+
+STEP 3 — Before returning, verify: count how many times A, B, C, D appear as correctAnswer. Each must be 2 or 3. If not, rewrite the affected questions.
 
 Return JSON: { "vocabQuestions": [ ...exactly 10 items... ] }`;
 
@@ -153,7 +156,7 @@ QUALITY RULES:
 3. Each blank tests ONE specific thing: vocabulary, grammar, collocation, discourse connector, or idiom.
 4. For each blank, write 4 options. ONLY ONE option must be correct. The other 3 must be clearly wrong in context (wrong grammar, wrong collocation, or wrong meaning). Options may be words OR short phrases.
 5. "correctAnswer": bare letter A/B/C/D — NO parentheses.
-6. ANSWER DISTRIBUTION: across the 5 gaps, spread answers across A, B, C, D. Do NOT make all answers the same letter.
+6. ANSWER DISTRIBUTION: Before writing the 5 gaps, randomly pre-assign correctAnswer values for gaps 11-15 so that A, B, C, D are spread unpredictably (e.g. [C, A, D, B, C] or [B, D, A, C, B]). Then write each gap so its correct option lands on the pre-assigned letter. Do NOT default all answers to A.
 7. Verify: the passage has EXACTLY 5 inline blanks formatted as __ 11 __ through __ 15 __.
 8. "explanation": Traditional Chinese explanation per gap.
 
@@ -267,7 +270,7 @@ QUALITY RULES:
 3. Each passage has EXACTLY 4 comprehension questions testing different skills: main idea, specific detail, vocabulary in context, inference or title.
 4. "options": exactly 4 strings per question: ["(A) ...", "(B) ...", "(C) ...", "(D) ..."]. Options can be full sentences or short phrases.
 5. "correctAnswer": bare letter A/B/C/D — NO parentheses.
-6. ANSWER DISTRIBUTION: across all questions in a passage, spread answers across A, B, C, D. Do NOT cluster on one letter.
+6. ANSWER DISTRIBUTION: Before writing the questions for each passage, randomly pre-assign correctAnswer values so A, B, C, D each appear at least once across the 4 questions (e.g. [C, A, D, B]). Then write each question so its correct option lands on the pre-assigned letter. Do NOT default all answers to A.
 7. Each question must have EXACTLY ONE unambiguously correct answer supported by the passage text.
 8. "explanation": Traditional Chinese explanation with the key evidence sentence from the passage translated.
 9. Return EXACTLY ${levels.length} passage(s).
