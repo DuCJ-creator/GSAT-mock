@@ -22,6 +22,7 @@ const REASSURING_MESSAGES = [
   "正在為你編寫多層次閱讀測驗：基本、精實、進階...",
   "正在由杜老師審對答案及 Traditional Chinese 專業詳解中..."
 ];
+
 export default function App() {
   const [activeTab, setActiveTab] = useState<"lobby" | "player" | "worksheet" | "report">("lobby");
   const [showSubmitConfirm, setShowSubmitConfirm] = useState(false);
@@ -270,16 +271,17 @@ export default function App() {
 
     // Cloze
     if (examSuite.clozeSuite?.questions) {
-      examSuite.clozeSuite.questions.forEach((q) => {
-        const userAns = session.answers.cloze[q.gapNumber] || "";
+      examSuite.clozeSuite.questions.forEach((q, idx) => {
+        const gapNum = q.gapNumber ?? (11 + idx);
+        const userAns = session.answers.cloze[gapNum] || "";
         const correctAns = normalizeAnswer(q.correctAnswer);
         const isCorrect = userAns === correctAns;
         if (isCorrect) summary.cloze.correct++;
         summary.cloze.total++;
         reportDetails.push({
-          section: "cloze", questionNumberOrName: String(q.gapNumber),
+          section: "cloze", questionNumberOrName: String(gapNum),
           isCorrect, userAnswer: userAns, correctAnswer: correctAns,
-          questionText: `綜合測驗第(${q.gapNumber})格 [${q.category}]`
+          questionText: `綜合測驗第(${gapNum})格 [${q.category || ""}]`
         });
       });
       summary.cloze.score = summary.cloze.total > 0 ? Math.round((summary.cloze.correct / summary.cloze.total) * 100) : 0;
@@ -492,7 +494,7 @@ export default function App() {
                     {[
                       { key: "vocab", label: "Vocabulary MCQ (10 Qs) / 字彙單選題" },
                       { key: "cloze", label: "Cloze Test (5 gaps 11–15) / 綜合測驗" },
-                      { key: "blankMatching", label: "Blank Matching (10 gaps 21–30) / 文意選填" },
+                      { key: "blankMatching", label: "Blank Matching (10 gaps 16–25) / 文意選填" },
                     ].map(({ key, label }) => (
                       <label key={key} className={`border rounded-xl p-4 flex items-center gap-3 cursor-pointer transition ${(selectedExerciseTypes as any)[key] ? "border-teal-400 bg-teal-50/20" : "border-stone-200 bg-white hover:border-stone-300"}`}>
                         <input type="checkbox" checked={(selectedExerciseTypes as any)[key]}
@@ -699,24 +701,29 @@ export default function App() {
                     <div className="space-y-4 mt-4">
                       <span className="text-xs font-bold font-mono text-stone-400 uppercase tracking-widest block">Choose options for gaps 11–15:</span>
                       {examSuite.clozeSuite.questions.map((q, idx) => {
-                        const userSel = session.answers.cloze[q.gapNumber] || "";
+                        const gapNum = q.gapNumber ?? (11 + idx);
+                        const userSel = session.answers.cloze[gapNum] || "";
                         const opts = normalizeOptions(q.options);
                         return (
                           <div key={idx} className="bg-white border border-stone-200 rounded-xl p-4 space-y-3">
-                            <span className="text-xs font-bold font-mono text-amber-800">Gap ({q.gapNumber})</span>
-                            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-                              {opts.map((optString, optIdx) => {
-                                const letter = optString.charAt(1);
-                                const isSelected = userSel === letter;
-                                return (
-                                  <button key={optIdx} type="button"
-                                    onClick={() => setSession(prev => ({ ...prev, answers: { ...prev.answers, cloze: { ...prev.answers.cloze, [q.gapNumber]: letter } } }))}
-                                    className={`py-2 px-3 rounded-lg text-xs font-semibold text-center border transition ${isSelected ? "bg-teal-700 text-white border-teal-700" : "bg-white text-stone-700 border-stone-300 hover:bg-stone-50"}`}>
-                                    {optString}
-                                  </button>
-                                );
-                              })}
-                            </div>
+                            <span className="text-xs font-bold font-mono text-amber-800">Gap ({gapNum})</span>
+                            {opts.length === 0 ? (
+                              <p className="text-xs text-rose-400 italic">⚠ Options missing for this gap — please regenerate.</p>
+                            ) : (
+                              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                                {opts.map((optString, optIdx) => {
+                                  const letter = optString.charAt(1);
+                                  const isSelected = userSel === letter;
+                                  return (
+                                    <button key={optIdx} type="button"
+                                      onClick={() => setSession(prev => ({ ...prev, answers: { ...prev.answers, cloze: { ...prev.answers.cloze, [gapNum]: letter } } }))}
+                                      className={`py-2 px-3 rounded-lg text-xs font-semibold text-center border transition ${isSelected ? "bg-teal-700 text-white border-teal-700" : "bg-white text-stone-700 border-stone-300 hover:bg-stone-50"}`}>
+                                      {optString}
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                            )}
                           </div>
                         );
                       })}
