@@ -668,6 +668,9 @@ export default function App() {
                             ) : (
                               <p className="text-xs text-rose-500 italic">⚠ Question text missing — please regenerate.</p>
                             )}
+                            {q._warning && (
+                              <p className="text-xs text-amber-600 bg-amber-50 border border-amber-200 rounded px-2 py-1 mt-1">⚠ {q._warning}</p>
+                            )}
                             <div className="grid grid-cols-1 md:grid-cols-4 gap-2.5 mt-4">
                               {normalizeOptions(q.options).map((optString, optIdx) => {
                                 const letter = optString.charAt(1);
