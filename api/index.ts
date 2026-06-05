@@ -34,6 +34,21 @@ function verifyApiKeys() {
   }
 }
 
+async function callOpenAIHighQuality(system: string, user: string): Promise<any> {
+  const openai = getOpenAI();
+  const response = await openai.chat.completions.create({
+    model: "gpt-4o",  // Use full GPT-4o for question quality — mini cannot reliably produce unambiguous exam questions
+    messages: [
+      { role: "system", content: system },
+      { role: "user", content: user + "\n\nCRITICAL: Return ONLY a valid JSON object. No markdown, no preamble." }
+    ],
+    response_format: { type: "json_object" },
+    temperature: 0.7,
+  });
+  return JSON.parse((response.choices[0].message.content || "").trim());
+}
+
+// Standard quality calls — used for cloze, matching, reading, report
 async function callOpenAI(system: string, user: string): Promise<any> {
   const openai = getOpenAI();
   const model = process.env.OPENAI_API_MODEL || "gpt-4o-mini";
@@ -117,6 +132,7 @@ STEP 2: Write a sentence where:
 - The surrounding context (collocations, subject matter, grammar structure) makes ONLY the correct word fit.
 - The sentence is factually accurate, professionally written, and natural academic English.
 - The sentence could appear in a real GSAT exam paper without modification.
+- CRITICAL: The correct answer word (or any of its morphological variants — e.g. if answer is "surrender", also exclude "surrendered", "surrendering") must NOT appear anywhere in the sentence.
 
 STEP 3: Choose 3 distractors that are:
 - The SAME part of speech as the correct answer.
@@ -177,11 +193,24 @@ Return JSON: { "vocabQuestions": [ ...EXACTLY 10 items... ] }`;
       required: ["vocabQuestions"]
     };
 
-    let data = process.env.OPENAI_API_KEY ? await callOpenAI(system, user) : await callGemini(user, schema);
+    let data = process.env.OPENAI_API_KEY ? await callOpenAIHighQuality(system, user) : await callGemini(user, schema);
 
-    // Hard cap: never return more than 10 questions
-    if (data.vocabQuestions && data.vocabQuestions.length > 10) {
-      data.vocabQuestions = data.vocabQuestions.slice(0, 10);
+    // Server-side guards
+    if (data.vocabQuestions) {
+      // Hard cap at 10
+      if (data.vocabQuestions.length > 10) {
+        data.vocabQuestions = data.vocabQuestions.slice(0, 10);
+      }
+      // Flag any question where the answer word appears in the sentence
+      data.vocabQuestions = data.vocabQuestions.map((q: any) => {
+        const answerWord = (q.wordTested || "").toLowerCase();
+        const questionText = (q.question || "").toLowerCase();
+        if (answerWord && questionText.includes(answerWord)) {
+          // Mark for client to show warning — don't silently drop
+          q._warning = `Answer word "${q.wordTested}" appears in the question sentence.`;
+        }
+        return q;
+      });
     }
 
     res.json({ success: true, data });
