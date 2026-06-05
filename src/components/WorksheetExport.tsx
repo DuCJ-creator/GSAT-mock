@@ -23,49 +23,26 @@ export default function WorksheetExport({ suite, onBack }: WorksheetExportProps)
     md += `Class: ______________  Name: ______________  Date: ______________  Score: ______________\n`;
     md += `========================================================================\n\n`;
 
-    // Vocab
     if (suite.vocabQuestions && suite.vocabQuestions.length > 0) {
       md += `### Part I: Multiple-Choice Questions (10 GSAT-Level Questions)\n`;
-      md += `*Directions: Choose the best word to fill in each blank and complete the sentence.*\n\n`;
+      md += `*Directions: Choose the best word to fill in each blank.*\n\n`;
       suite.vocabQuestions.forEach((q, idx) => {
-        md += `${idx + 1}. ${q.question}\n`;
+        const questionText = q.question || q.prompt || q.sentence || q.stem || "";
+        md += `${idx + 1}. ${questionText}\n`;
         md += `   ${normalizeOptions(q.options).join("   ")}\n\n`;
       });
       md += `\n`;
     }
 
-    // Cloze
-    if (suite.clozeSuite && suite.clozeSuite.questions) {
-      md += `### Part II: Cloze Test (綜合測驗)\n`;
-      md += `*Directions: Read the passage and choose the best option for each blank (gaps 11–15).*\n\n`;
-      md += `${suite.clozeSuite.passage}\n\n`;
-      suite.clozeSuite.questions.forEach((q) => {
-        md += `(${q.gapNumber}) ${normalizeOptions(q.options).join("   ")}\n`;
-      });
-      md += `\n\n`;
-    }
-
-    // Matching
-    if (suite.blankMatchingSuite) {
-      md += `### Part III: Blank Matching (文意選填)\n`;
-      md += `*Directions: Choose the correct word from the options below to fill in each blank (gaps 16–25). Use each option exactly once.*\n\n`;
-      md += `Options:\n`;
-      md += `   ${normalizeOptions(suite.blankMatchingSuite.options).join("   ")}\n\n`;
-      md += `${suite.blankMatchingSuite.passage}\n\n`;
-    }
-
-    // Reading
     if (suite.readingPassages && suite.readingPassages.length > 0) {
-      md += `### Part IV: Reading Comprehension\n`;
-      md += `*Directions: Read the following passages and choose the best answer for each question.*\n\n`;
+      md += `### Part II: Reading Comprehension\n`;
+      md += `*Directions: Read the passages and choose the best answer.*\n\n`;
       suite.readingPassages.forEach((p, pIdx) => {
         md += `[Passage ${pIdx + 1}] Level: ${p.level.toUpperCase()} - ${p.title}\n`;
         md += `${p.passage}\n\n`;
         p.questions.forEach((q, qIdx) => {
           md += `  ${qIdx + 1}. ${q.question}\n`;
-          normalizeOptions(q.options).forEach((opt) => {
-            md += `     ${opt}\n`;
-          });
+          normalizeOptions(q.options).forEach((opt) => { md += `     ${opt}\n`; });
           md += `\n`;
         });
         md += `\n`;
@@ -79,37 +56,18 @@ export default function WorksheetExport({ suite, onBack }: WorksheetExportProps)
     if (suite.vocabQuestions && suite.vocabQuestions.length > 0) {
       md += `#### Part I Solution:\n`;
       suite.vocabQuestions.forEach((q, idx) => {
-        md += `${idx + 1}. Correct Answer: (${q.correctAnswer}) - Word Tested: ${q.wordTested}\n`;
+        md += `${idx + 1}. Correct Answer: (${q.correctAnswer}) - Word: ${q.wordTested}\n`;
         if (includeExplanations) md += `   解析: ${q.explanation}\n\n`;
-      });
-      md += `\n`;
-    }
-
-    if (suite.clozeSuite && suite.clozeSuite.questions) {
-      md += `#### Part II Solution:\n`;
-      suite.clozeSuite.questions.forEach((q) => {
-        md += `Gap (${q.gapNumber}) Correct Answer: (${q.correctAnswer}) [Category: ${q.category}]\n`;
-        if (includeExplanations) md += `   解析: ${q.explanation}\n\n`;
-      });
-      md += `\n`;
-    }
-
-    if (suite.blankMatchingSuite) {
-      md += `#### Part III Solution:\n`;
-      md += `Blanks (16) through (25) Answers:\n`;
-      suite.blankMatchingSuite.answers.forEach((ans, idx) => {
-        md += `(${idx + 16}): ${ans}  (Word: ${normalizeOptions(suite.blankMatchingSuite!.options).find(o => o.startsWith(`(${ans})`)) || ans})\n`;
-        if (includeExplanations) md += `     解析: ${suite.blankMatchingSuite!.explanations[idx]}\n`;
       });
       md += `\n`;
     }
 
     if (suite.readingPassages && suite.readingPassages.length > 0) {
-      md += `#### Part IV Solution:\n`;
+      md += `#### Part II Solution:\n`;
       suite.readingPassages.forEach((p, pIdx) => {
         md += `[Passage ${pIdx + 1}] - ${p.title}\n`;
         p.questions.forEach((q, qIdx) => {
-          md += `  Question ${qIdx + 1}: Correct Answer: (${q.correctAnswer})\n`;
+          md += `  Q${qIdx + 1}: (${q.correctAnswer})\n`;
           if (includeExplanations) md += `     解析: ${q.explanation}\n\n`;
         });
         md += `\n`;
@@ -118,6 +76,7 @@ export default function WorksheetExport({ suite, onBack }: WorksheetExportProps)
 
     return md;
   };
+
 
   const handleCopy = () => {
     const text = generateMarkdown();
@@ -239,7 +198,7 @@ export default function WorksheetExport({ suite, onBack }: WorksheetExportProps)
             {suite.vocabQuestions && suite.vocabQuestions.length > 0 && (
               <div id="print-vocab-section" className="space-y-4">
                 <div className="border-l-4 border-stone-800 pl-3">
-                  <h2 className="text-lg font-bold font-display text-stone-900 uppercase">Part I: Multiple-Choice Questions (學測字彙單選題)</h2>
+                  <h2 className="text-lg font-bold font-display text-stone-900 uppercase">Part I: Vocabulary MCQ (學測字彙單選題)</h2>
                   <p className="text-xs text-stone-500 italic">Directions: Choose the best word that grammatically and contextually makes the sentence meaningful.</p>
                 </div>
                 <div className="space-y-6 mt-4">
@@ -260,60 +219,12 @@ export default function WorksheetExport({ suite, onBack }: WorksheetExportProps)
               </div>
             )}
 
-            {/* Part II: Cloze */}
-            {suite.clozeSuite && suite.clozeSuite.questions && (
-              <div id="print-cloze-section" className="space-y-4 print-page-break">
-                <div className="border-l-4 border-stone-800 pl-3">
-                  <h2 className="text-lg font-bold font-display text-stone-900 uppercase">Part II: Cloze Test (學測綜合測驗)</h2>
-                  <p className="text-xs text-stone-500 italic">Directions: For each blank (gaps 11–15), choose the most appropriate option.</p>
-                </div>
-                <div className="bg-stone-50 border border-stone-200 rounded-xl p-5 md:p-6 text-sm font-sans leading-loose text-stone-900 mt-4 whitespace-pre-wrap">
-                  {suite.clozeSuite.passage}
-                </div>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
-                  {suite.clozeSuite.questions.map((q, idx) => {
-                    const gapNum = q.gapNumber ?? (11 + idx);
-                    return (
-                      <div key={idx} id={`print-cloze-q-${idx}`} className="text-xs border-b border-dashed border-stone-100 pb-2">
-                        <span className="font-bold text-stone-900">({gapNum})</span>
-                        <div className="flex flex-wrap gap-x-3 gap-y-1 mt-1 text-stone-700">
-                          {normalizeOptions(q.options).map((opt, optIdx) => (
-                            <span key={optIdx} className="whitespace-nowrap">{opt}</span>
-                          ))}
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            )}
-
-            {/* Part III: Blank Matching */}
-            {suite.blankMatchingSuite && (
-              <div id="print-matching-section" className="space-y-4 print-page-break">
-                <div className="border-l-4 border-stone-800 pl-3">
-                  <h2 className="text-lg font-bold font-display text-stone-900 uppercase">Part III: Blank Matching (學測文意選填)</h2>
-                  <p className="text-xs text-stone-500 italic">Directions: Match the ten candidate words below to fill in gaps 16–25. Use each candidate exactly once.</p>
-                </div>
-                <div className="bg-stone-100 border border-stone-200 rounded-xl p-4 text-center mt-4">
-                  <span className="text-xs uppercase tracking-wider font-mono text-stone-500 block mb-2 font-bold">Candidate Option Table</span>
-                  <div className="grid grid-cols-5 gap-2 text-xs font-mono font-medium text-stone-800">
-                    {normalizeOptions(suite.blankMatchingSuite.options).map((opt, idx) => (
-                      <div key={idx} className="bg-white border border-stone-200 py-1.5 px-2 rounded-md shadow-sm">{opt}</div>
-                    ))}
-                  </div>
-                </div>
-                <div className="bg-stone-50 border border-stone-200 rounded-xl p-5 md:p-6 text-sm font-sans leading-loose text-stone-900 mt-4 whitespace-pre-wrap">
-                  {suite.blankMatchingSuite.passage}
-                </div>
-              </div>
-            )}
-
-            {/* Part IV: Reading */}
+            {/* Part II: Reading */}
+            {/* Part II: Reading */}
             {suite.readingPassages && suite.readingPassages.length > 0 && (
               <div id="print-reading-section" className="space-y-6 print-page-break">
                 <div className="border-l-4 border-stone-800 pl-3">
-                  <h2 className="text-lg font-bold font-display text-stone-900 uppercase">Part IV: Reading Comprehension (學測閱讀測驗)</h2>
+                  <h2 className="text-lg font-bold font-display text-stone-900 uppercase">Part II: Reading Comprehension (學測閱讀測驗)</h2>
                   <p className="text-xs text-stone-500 italic">Directions: Read each passage and answer the four comprehension questions that follow.</p>
                 </div>
                 {suite.readingPassages.map((p, pIdx) => (
@@ -375,57 +286,9 @@ export default function WorksheetExport({ suite, onBack }: WorksheetExportProps)
             )}
 
             {/* Part II answers */}
-            {suite.clozeSuite && suite.clozeSuite.questions && (
-              <div id="solutions-cloze" className="space-y-3 pt-4 border-t border-dashed border-stone-200">
-                <h3 className="text-sm font-bold border-b border-stone-300 pb-1 text-stone-900">Part II: Cloze Solution</h3>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  {suite.clozeSuite.questions.map((q, idx) => (
-                    <div key={idx} className="bg-stone-50/80 p-2.5 rounded-lg border border-stone-200">
-                      <div className="flex justify-between font-mono font-bold text-amber-900">
-                        <span>Blank ({q.gapNumber})</span>
-                        <span>Answer: ({q.correctAnswer})</span>
-                      </div>
-                      <span className="inline-block bg-stone-200/60 text-[10px] font-mono px-1.5 py-0.5 rounded text-stone-600 mt-1 uppercase">
-                        Category: {q.category}
-                      </span>
-                      {includeExplanations && (
-                        <p className="text-stone-700 mt-1.5 leading-normal">
-                          <span className="font-sans font-bold">【詳解】</span> {q.explanation}
-                        </p>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {/* Part III answers */}
-            {suite.blankMatchingSuite && (
-              <div id="solutions-matching" className="space-y-3 pt-4 border-t border-dashed border-stone-200">
-                <h3 className="text-sm font-bold border-b border-stone-300 pb-1 text-stone-900">Part III: Blank Matching Key</h3>
-                <div className="bg-stone-50 rounded-xl p-4 border border-stone-200 grid grid-cols-2 sm:grid-cols-5 gap-3 font-mono font-bold text-stone-800 mb-3 text-center">
-                  {suite.blankMatchingSuite.answers.map((ans, idx) => (
-                    <div key={idx} className="bg-white border border-stone-300 py-1 rounded-md">
-                      Gap ({idx + 16}): {ans}
-                    </div>
-                  ))}
-                </div>
-                {includeExplanations && (
-                  <div className="space-y-2 pl-2">
-                    {suite.blankMatchingSuite.explanations.map((expl, idx) => (
-                      <p key={idx} className="text-stone-700">
-                        <strong>({idx + 16}) [{suite.blankMatchingSuite!.answers[idx]}]:</strong> {expl}
-                      </p>
-                    ))}
-                  </div>
-                )}
-              </div>
-            )}
-
-            {/* Part IV answers */}
             {suite.readingPassages && suite.readingPassages.length > 0 && (
               <div id="solutions-reading" className="space-y-3 pt-4 border-t border-dashed border-stone-200">
-                <h3 className="text-sm font-bold border-b border-stone-300 pb-1 text-stone-900">Part IV: Reading Solutions</h3>
+                <h3 className="text-sm font-bold border-b border-stone-300 pb-1 text-stone-900">Part II: Reading Solutions</h3>
                 <div className="space-y-6">
                   {suite.readingPassages.map((p, pIdx) => (
                     <div key={pIdx} className="space-y-2">
