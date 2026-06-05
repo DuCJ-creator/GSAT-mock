@@ -27,9 +27,7 @@ export default function ProgressReportView({ report, suite, onRestart, onGoToWor
   const [feedback, setFeedback] = useState<TeacherFeedback | null>(null);
   const [loadingFeedback, setLoadingFeedback] = useState(true);
   const [errorFeedback, setErrorFeedback] = useState<string | null>(null);
-  const [showClozePassage, setShowClozePassage] = useState(false);
   const [expandedReadingIdx, setExpandedReadingIdx] = useState<number | null>(null);
-  const [showMatchingPassage, setShowMatchingPassage] = useState(false);
 
   useEffect(() => {
     async function fetchTeacherDiagnostics() {
@@ -40,7 +38,6 @@ export default function ProgressReportView({ report, suite, onRestart, onGoToWor
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             scoreSummary: report.scoreSummary,
-            details: report.details,
             selectedLevel: suite.metadata.selectedLevel,
           }),
         });
@@ -76,13 +73,7 @@ export default function ProgressReportView({ report, suite, onRestart, onGoToWor
       const idx = parseInt(item.questionNumberOrName.replace("vocab_", ""));
       return suite.vocabQuestions[idx]?.explanation || "無獨立解析";
     }
-    if (item.section === "cloze" && suite.clozeSuite) {
-      return suite.clozeSuite.questions.find(q => String(q.gapNumber) === item.questionNumberOrName)?.explanation || "無獨立解析";
-    }
-    if (item.section === "blankMatching" && suite.blankMatchingSuite) {
-      const idx = parseInt(item.questionNumberOrName) - 16;
-      return suite.blankMatchingSuite.explanations[idx] || "無獨立解析";
-    }
+
     if (item.section === "reading" && suite.readingPassages) {
       const [pIdx, qIdx] = item.questionNumberOrName.split("_").map(Number);
       return suite.readingPassages[pIdx]?.questions[qIdx]?.explanation || "無獨立解析";
@@ -187,9 +178,7 @@ export default function ProgressReportView({ report, suite, onRestart, onGoToWor
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
           {[
             { label: "Part I: Vocabulary MCQ (字彙題)", ...report.scoreSummary.vocab },
-            { label: "Part II: Cloze (綜合測驗)", ...report.scoreSummary.cloze },
-            { label: "Part III: Blank Matching (文意選填)", ...report.scoreSummary.blankMatching },
-            { label: "Part IV: Reading (閱讀測驗)", ...report.scoreSummary.reading },
+            { label: "Part II: Reading (閱讀測驗)", ...report.scoreSummary.reading },
           ].map((sec, idx) => {
             if (sec.total === 0) return null;
             return (
@@ -256,105 +245,11 @@ export default function ProgressReportView({ report, suite, onRestart, onGoToWor
       </div>
 
       {/* ── PASSAGE REVIEW SECTION ── */}
-      {/* Cloze Passage */}
-      {suite.clozeSuite && (
-        <div className="bg-white border border-stone-200 rounded-2xl shadow-xs overflow-hidden">
-          <button
-            onClick={() => setShowClozePassage(!showClozePassage)}
-            className="w-full px-6 py-4 flex items-center justify-between text-left hover:bg-stone-50 transition"
-          >
-            <div className="flex items-center gap-2">
-              <span className="bg-teal-100 text-teal-800 font-mono text-[10px] px-2 py-0.5 rounded font-bold uppercase">Part II</span>
-              <span className="text-sm font-bold text-stone-900">Cloze Passage (綜合測驗全文)</span>
-            </div>
-            {showClozePassage ? <ChevronUp className="w-4 h-4 text-stone-400" /> : <ChevronDown className="w-4 h-4 text-stone-400" />}
-          </button>
-          {showClozePassage && (
-            <div className="px-6 pb-6 space-y-4">
-              <div className="bg-stone-50 border border-stone-200 rounded-xl p-5 text-sm font-sans leading-loose text-stone-800 whitespace-pre-wrap">
-                {suite.clozeSuite.passage}
-              </div>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                {suite.clozeSuite.questions?.map((q, idx) => {
-                  const detail = report.details.find(d => d.section === "cloze" && d.questionNumberOrName === String(q.gapNumber));
-                  const isCorrect = detail?.isCorrect;
-                  return (
-                    <div key={idx} className={`p-3 rounded-xl border text-xs ${isCorrect ? "border-teal-200 bg-teal-50/30" : "border-rose-200 bg-rose-50/30"}`}>
-                      <div className="flex justify-between items-center mb-1">
-                        <span className="font-bold text-stone-800">Gap ({q.gapNumber})</span>
-                        <span className={`font-mono font-bold ${isCorrect ? "text-teal-700" : "text-rose-700"}`}>
-                          Answer: ({q.correctAnswer}) {isCorrect ? "✓" : `✗ You: (${detail?.userAnswer || "—"})`}
-                        </span>
-                      </div>
-                      <div className="flex flex-wrap gap-2 my-1">
-                        {normalizeOptions(q.options).map((opt, oi) => (
-                          <span key={oi} className={`px-2 py-0.5 rounded font-mono ${opt.startsWith(`(${q.correctAnswer})`) ? "bg-teal-100 text-teal-800 font-bold" : "bg-stone-100 text-stone-600"}`}>{opt}</span>
-                        ))}
-                      </div>
-                      <p className="text-stone-600 mt-1 leading-normal">{q.explanation}</p>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* Blank Matching Passage */}
-      {suite.blankMatchingSuite && (
-        <div className="bg-white border border-stone-200 rounded-2xl shadow-xs overflow-hidden">
-          <button
-            onClick={() => setShowMatchingPassage(!showMatchingPassage)}
-            className="w-full px-6 py-4 flex items-center justify-between text-left hover:bg-stone-50 transition"
-          >
-            <div className="flex items-center gap-2">
-              <span className="bg-amber-100 text-amber-800 font-mono text-[10px] px-2 py-0.5 rounded font-bold uppercase">Part III</span>
-              <span className="text-sm font-bold text-stone-900">Blank Matching Passage (文意選填全文)</span>
-            </div>
-            {showMatchingPassage ? <ChevronUp className="w-4 h-4 text-stone-400" /> : <ChevronDown className="w-4 h-4 text-stone-400" />}
-          </button>
-          {showMatchingPassage && (
-            <div className="px-6 pb-6 space-y-4">
-              <div className="bg-stone-100 border border-stone-200 rounded-xl p-4">
-                <span className="text-xs font-mono font-bold uppercase text-stone-500 block mb-2">Candidate Options</span>
-                <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 text-xs font-mono">
-                  {normalizeOptions(suite.blankMatchingSuite.options).map((opt, idx) => (
-                    <div key={idx} className="bg-white border border-stone-200 py-1.5 px-2 rounded-md text-center">{opt}</div>
-                  ))}
-                </div>
-              </div>
-              <div className="bg-stone-50 border border-stone-200 rounded-xl p-5 text-sm font-sans leading-loose text-stone-800 whitespace-pre-wrap">
-                {suite.blankMatchingSuite.passage}
-              </div>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                {suite.blankMatchingSuite.answers.map((ans, idx) => {
-                  const detail = report.details.find(d => d.section === "blankMatching" && d.questionNumberOrName === String(idx + 16));
-                  const isCorrect = detail?.isCorrect;
-                  const optText = normalizeOptions(suite.blankMatchingSuite!.options).find(o => o.startsWith(`(${ans})`)) || `(${ans})`;
-                  return (
-                    <div key={idx} className={`p-3 rounded-xl border text-xs ${isCorrect ? "border-teal-200 bg-teal-50/30" : "border-rose-200 bg-rose-50/30"}`}>
-                      <div className="flex justify-between items-center mb-1">
-                        <span className="font-bold text-stone-800">Blank __ {idx + 16} __</span>
-                        <span className={`font-mono font-bold ${isCorrect ? "text-teal-700" : "text-rose-700"}`}>
-                          ({ans}) {optText} {isCorrect ? "✓" : `✗ You: (${detail?.userAnswer || "—"})`}
-                        </span>
-                      </div>
-                      <p className="text-stone-600 leading-normal">{suite.blankMatchingSuite!.explanations[idx]}</p>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          )}
-        </div>
-      )}
-
       {/* Reading Passages */}
       {suite.readingPassages && suite.readingPassages.length > 0 && (
         <div className="space-y-3">
           <h3 className="text-sm font-bold text-stone-900 flex items-center gap-2">
-            <span className="bg-stone-100 text-stone-700 font-mono text-[10px] px-2 py-0.5 rounded font-bold uppercase">Part IV</span>
+            <span className="bg-stone-100 text-stone-700 font-mono text-[10px] px-2 py-0.5 rounded font-bold uppercase">Part II</span>
             Reading Passages (閱讀測驗全文)
           </h3>
           {suite.readingPassages.map((p, pIdx) => (
@@ -417,7 +312,7 @@ export default function ProgressReportView({ report, suite, onRestart, onGoToWor
               <div className="space-y-2 max-w-2xl flex-1">
                 <div className="flex flex-wrap items-center gap-2">
                   <span className="bg-stone-100 text-stone-600 px-2 py-0.5 rounded text-[10px] font-mono uppercase font-bold">
-                    {item.section === "vocab" ? "Vocab" : item.section === "cloze" ? "Cloze" : item.section === "blankMatching" ? "Matching" : "Reading"}
+                    {item.section === "vocab" ? "Vocab" : "Reading"}
                   </span>
                   {item.isCorrect ? (
                     <span className="text-teal-700 bg-teal-50 border border-teal-100 flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold">
