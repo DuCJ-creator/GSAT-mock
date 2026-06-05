@@ -485,10 +485,8 @@ app.post("/api/evaluate-report", async (req, res) => {
     const user = `Write a personalized progress report as Tr. Shirley Du.
 Performance:
 - Overall: ${scoreSummary.comprehensive.correct}/${scoreSummary.comprehensive.total} (${scoreSummary.comprehensive.score}%)
-- Vocabulary: ${scoreSummary.vocab.correct}/${scoreSummary.vocab.total}
-- Cloze: ${scoreSummary.cloze.correct}/${scoreSummary.cloze.total}
-- Blank Matching: ${scoreSummary.blankMatching.correct}/${scoreSummary.blankMatching.total}
-- Reading: ${scoreSummary.reading.correct}/${scoreSummary.reading.total}
+- Vocabulary MCQ: ${scoreSummary.vocab.correct}/${scoreSummary.vocab.total}
+- Reading Comprehension: ${scoreSummary.reading.correct}/${scoreSummary.reading.total}
 - Level: ${selectedLevel || "Mixed"}
 
 Return JSON: { "greeting": string, "analysis": string, "tips": [string, string, string], "encouragement": string }`;
