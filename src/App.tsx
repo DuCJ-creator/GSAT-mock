@@ -636,7 +636,7 @@ export default function App() {
                 {currentSection === "reading" && examSuite.readingPassages && (
                   <div className="space-y-8">
                     <div className="border-b border-stone-100 pb-3">
-                      <h3 className="text-base font-bold text-stone-900">Part IV: Reading Comprehension (閱讀測驗 26+)</h3>
+                      <h3 className="text-base font-bold text-stone-900">Part IV: Reading Comprehension (閱讀測驗 11+)</h3>
                       <p className="text-xs text-stone-500 mt-0.5">仔細閱讀文章後作答。</p>
                     </div>
                     {examSuite.readingPassages.map((p, pIdx) => (
@@ -650,7 +650,7 @@ export default function App() {
                           {p.questions.map((q, qIdx) => {
                             const userKey = `${pIdx}_${qIdx}`;
                             const userAns = session.answers.reading[userKey] || "";
-                            const questionNumber = 26 + (pIdx * 4) + qIdx;
+                            const questionNumber = 11 + (pIdx * 4) + qIdx;
                             const opts = normalizeOptions(q.options);
                             return (
                               <div key={userKey} className="bg-stone-50/50 p-4 rounded-xl border border-stone-150/50 space-y-3">
