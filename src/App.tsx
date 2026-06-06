@@ -171,18 +171,27 @@ export default function App() {
       const promises: Promise<any>[] = [];
       const sectionKeys: string[] = [];
 
-      if (selectedExerciseTypes.vocab) {
-        promises.push(fetchSection("/api/generate-vocab", { vocabList: finalVocabList }));
-        sectionKeys.push("vocab");
-      }
-      }
-      if (selectedExerciseTypes.reading) {
-        promises.push(fetchSection("/api/generate-reading", {
-          vocabList: finalVocabList,
-          selectedReadingLevels: selectedReadingLevels.length > 0 ? selectedReadingLevels : ["essential"]
-        }));
-        sectionKeys.push("reading");
-      }
+     if (selectedExerciseTypes.vocab) {
+  promises.push(
+    fetchSection("/api/generate-vocab", {
+      vocabList: finalVocabList
+    })
+  );
+  sectionKeys.push("vocab");
+}
+
+if (selectedExerciseTypes.reading) {
+  promises.push(
+    fetchSection("/api/generate-reading", {
+      vocabList: finalVocabList,
+      selectedReadingLevels:
+        selectedReadingLevels.length > 0
+          ? selectedReadingLevels
+          : ["essential"]
+    })
+  );
+  sectionKeys.push("reading");
+}
 
       const results = await Promise.all(promises);
 
