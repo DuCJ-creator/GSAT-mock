@@ -41,7 +41,8 @@ export default function WorksheetExport({ suite, onBack }: WorksheetExportProps)
         md += `[Passage ${pIdx + 1}] Level: ${p.level.toUpperCase()} - ${p.title}\n`;
         md += `${p.passage}\n\n`;
         p.questions.forEach((q, qIdx) => {
-          md += `  ${qIdx + 1}. ${q.question}\n`;
+         const qNumber = 11 + (pIdx * 4) + qIdx;
+          md += `  ${qNumber}. ${q.question}\n`;
           normalizeOptions(q.options).forEach((opt) => { md += `     ${opt}\n`; });
           md += `\n`;
         });
@@ -56,7 +57,8 @@ export default function WorksheetExport({ suite, onBack }: WorksheetExportProps)
     if (suite.vocabQuestions && suite.vocabQuestions.length > 0) {
       md += `#### Part I Solution:\n`;
       suite.vocabQuestions.forEach((q, idx) => {
-        md += `${idx + 1}. Correct Answer: (${q.correctAnswer}) - Word: ${q.wordTested}\n`;
+        const qNumber = 11 + (pIdx * 4) + qIdx;
+md += `  Q${qNumber}: (${q.correctAnswer})\n`;
         if (includeExplanations) md += `   解析: ${q.explanation}\n\n`;
       });
       md += `\n`;
@@ -67,7 +69,8 @@ export default function WorksheetExport({ suite, onBack }: WorksheetExportProps)
       suite.readingPassages.forEach((p, pIdx) => {
         md += `[Passage ${pIdx + 1}] - ${p.title}\n`;
         p.questions.forEach((q, qIdx) => {
-          md += `  Q${qIdx + 1}: (${q.correctAnswer})\n`;
+         const qNumber = 11 + (pIdx * 4) + qIdx;
+md += `  Q${qNumber}: (${q.correctAnswer})\n`;
           if (includeExplanations) md += `     解析: ${q.explanation}\n\n`;
         });
         md += `\n`;
@@ -224,7 +227,7 @@ export default function WorksheetExport({ suite, onBack }: WorksheetExportProps)
             {suite.readingPassages && suite.readingPassages.length > 0 && (
               <div id="print-reading-section" className="space-y-6 print-page-break">
                 <div className="border-l-4 border-stone-800 pl-3">
-                  <h2 className="text-lg font-bold font-display text-stone-900 uppercase">Part II: Reading Comprehension (學測閱讀測驗)</h2>
+                  <h2 className="text-lg font-bold font-display text-stone-900 uppercase">Part II: Reading Comprehension (11–22)</h2>
                   <p className="text-xs text-stone-500 italic">Directions: Read each passage and answer the four comprehension questions that follow.</p>
                 </div>
                 {suite.readingPassages.map((p, pIdx) => (
@@ -237,7 +240,7 @@ export default function WorksheetExport({ suite, onBack }: WorksheetExportProps)
                     <div className="space-y-4 mt-6">
                       {p.questions.map((q, qIdx) => (
                         <div key={qIdx} id={`print-reading-q-${pIdx}-${qIdx}`} className="text-sm">
-                          <p className="font-medium text-stone-900">{qIdx + 1}. {q.question}</p>
+                          <p className="font-medium text-stone-900">{11 + (pIdx * 4) + qIdx}. {q.question}</p>
                           <div className="flex flex-col gap-1 mt-2 pl-3 text-stone-700 text-xs">
                             {normalizeOptions(q.options).map((opt, optIdx) => (
                               <span key={optIdx} className="block">{opt}</span>
@@ -299,7 +302,7 @@ export default function WorksheetExport({ suite, onBack }: WorksheetExportProps)
                         {p.questions.map((q, qIdx) => (
                           <div key={qIdx} className="bg-stone-50/80 p-2.5 rounded-lg border border-stone-200">
                             <div className="flex justify-between font-mono font-bold text-amber-900">
-                              <span>Q {qIdx + 1}</span>
+                             <span>Q {11 + (pIdx * 4) + qIdx}</span>
                               <span>Answer: ({q.correctAnswer})</span>
                             </div>
                             <p className="font-medium text-stone-700 my-1 italic">{q.question}</p>
