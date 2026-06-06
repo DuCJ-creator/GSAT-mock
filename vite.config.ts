@@ -9,16 +9,7 @@ export default defineConfig(() => {
     resolve: {
       alias: {
         '@': path.resolve(__dirname, '.'),
-        // Polyfill Node.js 'buffer' module for browser builds (required by papaparse -> safe-buffer)
-        buffer: 'buffer/',
       },
-    },
-    define: {
-      // Make 'global' available — some CJS packages expect it
-      global: 'globalThis',
-    },
-    optimizeDeps: {
-      include: ['papaparse', 'buffer'],
     },
     server: {
       hmr: process.env.DISABLE_HMR !== 'true',
