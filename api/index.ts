@@ -37,18 +37,17 @@ function verifyApiKeys() {
 async function callOpenAIHighQuality(system: string, user: string): Promise<any> {
   const openai = getOpenAI();
   const response = await openai.chat.completions.create({
-    model: "gpt-4o",  // Use full GPT-4o for question quality — mini cannot reliably produce unambiguous exam questions
+    model: "gpt-4o",
     messages: [
       { role: "system", content: system },
       { role: "user", content: user + "\n\nCRITICAL: Return ONLY a valid JSON object. No markdown, no preamble." }
     ],
     response_format: { type: "json_object" },
-    temperature: 0.7,
+    temperature: 0.3,
   });
   return JSON.parse((response.choices[0].message.content || "").trim());
 }
 
-// Standard quality calls — used for cloze, matching, reading, report
 async function callOpenAI(system: string, user: string): Promise<any> {
   const openai = getOpenAI();
   const model = process.env.OPENAI_API_MODEL || "gpt-4o-mini";
@@ -59,7 +58,7 @@ async function callOpenAI(system: string, user: string): Promise<any> {
       { role: "user", content: user + "\n\nCRITICAL: Return ONLY a valid JSON object. No markdown, no preamble." }
     ],
     response_format: { type: "json_object" },
-    temperature: 0.7,
+    temperature: 0.45,
   });
   return JSON.parse((response.choices[0].message.content || "").trim());
 }
@@ -73,103 +72,352 @@ async function callGemini(prompt: string, schema: any): Promise<any> {
       systemInstruction: "You are Tr. Shirley Du, an elite GSAT English educator in Taiwan. Return ONLY valid JSON matching the schema exactly.",
       responseMimeType: "application/json",
       responseSchema: schema,
-      temperature: 0.7,
+      temperature: 0.45,
     },
   });
   if (!response.text) throw new Error("Empty response from Gemini.");
   return JSON.parse(response.text.trim());
 }
 
-// Randomly shuffle a small answer key for pre-assignment
+function shuffle<T>(arr: T[]): T[] {
+  const copy = [...arr];
+  for (let j = copy.length - 1; j > 0; j--) {
+    const k = Math.floor(Math.random() * (j + 1));
+    [copy[j], copy[k]] = [copy[k], copy[j]];
+  }
+  return copy;
+}
+
 function makeAnswerKey(n: number, letters: string[]): string[] {
-  const key: string[] = [];
-  const perLetter = Math.floor(n / letters.length);
   const pool: string[] = [];
+  const perLetter = Math.floor(n / letters.length);
+
   for (const l of letters) {
     for (let i = 0; i < perLetter; i++) pool.push(l);
   }
-  // Fill remainder
+
   let i = 0;
-  while (pool.length < n) { pool.push(letters[i++ % letters.length]); }
-  // Fisher-Yates shuffle
-  for (let j = pool.length - 1; j > 0; j--) {
-    const k = Math.floor(Math.random() * (j + 1));
-    [pool[j], pool[k]] = [pool[k], pool[j]];
+  while (pool.length < n) pool.push(letters[i++ % letters.length]);
+
+  return shuffle(pool).slice(0, n);
+}
+
+function normalizeAnswer(answer: any): string {
+  return String(answer || "").replace(/[()]/g, "").trim().toUpperCase();
+}
+
+function normalizeOptions(options: any): string[] {
+  if (!options) return [];
+  const letters = ["A", "B", "C", "D"];
+
+  if (Array.isArray(options)) {
+    return options.slice(0, 4).map((opt: any, idx: number) => {
+      const raw = String(opt || "").trim();
+      if (/^\([A-D]\)\s*/.test(raw)) return raw;
+      if (/^[A-D][).]\s*/.test(raw)) return `(${raw[0]}) ${raw.substring(2).trim()}`;
+      return `(${letters[idx]}) ${raw}`;
+    });
   }
-  return pool.slice(0, n);
+
+  if (typeof options === "string") {
+    const parts = options.split(/\s*(?=\([A-D]\))/).filter(Boolean);
+    return normalizeOptions(parts.length > 1 ? parts : [options]);
+  }
+
+  return [];
+}
+
+function optionWord(option: string): string {
+  return option.replace(/^\([A-D]\)\s*/, "").trim();
+}
+
+function normalizePos(pos: any): string {
+  const p = String(pos || "").toLowerCase().replace(/\./g, "").trim();
+  if (["n", "noun", "名詞"].includes(p)) return "noun";
+  if (["v", "verb", "vi", "vt", "動詞"].includes(p)) return "verb";
+  if (["adj", "adjective", "形容詞"].includes(p)) return "adjective";
+  if (["adv", "adverb", "副詞"].includes(p)) return "adverb";
+  if (["prep", "preposition", "介系詞"].includes(p)) return "preposition";
+  if (["conj", "conjunction", "連接詞"].includes(p)) return "conjunction";
+  return p || "unspecified";
+}
+
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function answerLeaksIntoQuestion(question: string, word: string): boolean {
+  const q = String(question || "").toLowerCase();
+  const w = String(word || "").toLowerCase().trim();
+  if (!q || !w) return true;
+
+  const exact = new RegExp(`\\b${escapeRegExp(w)}\\b`, "i");
+  if (exact.test(q)) return true;
+
+  const suffixes = ["s", "es", "ed", "ing", "er", "est", "ly", "ion", "ions", "ment", "ments", "ity", "ities", "al", "ally"];
+  for (const suffix of suffixes) {
+    const form = `${w}${suffix}`;
+    const re = new RegExp(`\\b${escapeRegExp(form)}\\b`, "i");
+    if (re.test(q)) return true;
+  }
+
+  return false;
+}
+
+function pickTargetWords(vocabList: any[], count: number = 10) {
+  const clean = (Array.isArray(vocabList) ? vocabList : [])
+    .map((vw: any) => ({
+      word: String(vw.word || "").trim(),
+      pos: normalizePos(vw.pos),
+      rawPos: String(vw.pos || "").trim(),
+      meaning: String(vw.meaning || "").trim(),
+      level: vw.level,
+      unit: vw.unit
+    }))
+    .filter((vw: any) => vw.word.length > 0);
+
+  const seen = new Set<string>();
+  const unique = clean.filter((vw: any) => {
+    const key = vw.word.toLowerCase();
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+
+  return shuffle(unique).slice(0, count);
+}
+
+function buildTargetWordList(targetWords: any[], answerKey: string[]): string {
+  return targetWords.map((vw: any, i: number) => {
+    return `Q${i + 1}
+- Target word: ${vw.word}
+- POS from CSV: ${vw.rawPos || vw.pos || "unspecified"} (${vw.pos || "unspecified"})
+- Chinese meaning from CSV: ${vw.meaning || "未提供"}
+- Correct answer position: ${answerKey[i]}`;
+  }).join("\n\n");
+}
+
+function validateVocabQuestion(q: any, expected: any, expectedAnswer: string, index: number): string[] {
+  const issues: string[] = [];
+  const id = `Q${index + 1}`;
+
+  if (!q || typeof q !== "object") {
+    return [`${id}: question item is missing or invalid.`];
+  }
+
+  const question = String(q.question || "").trim();
+  const expectedWord = String(expected.word || "").trim();
+  const wordTested = String(q.wordTested || "").trim();
+  const correctAnswer = normalizeAnswer(q.correctAnswer);
+  const options = normalizeOptions(q.options);
+
+  if (!/^v\d+$/.test(String(q.id || ""))) issues.push(`${id}: id must be v1 through v10.`);
+  if (!question.includes("______")) issues.push(`${id}: question must contain exactly ______ as the blank.`);
+  if ((question.match(/______/g) || []).length !== 1) issues.push(`${id}: question must contain exactly one blank.`);
+  if (!wordTested) issues.push(`${id}: wordTested is missing.`);
+  if (wordTested.toLowerCase() !== expectedWord.toLowerCase()) {
+    issues.push(`${id}: wordTested must be exactly "${expectedWord}" from the CSV target list.`);
+  }
+  if (answerLeaksIntoQuestion(question, expectedWord)) {
+    issues.push(`${id}: target word "${expectedWord}" appears in or leaks into the sentence.`);
+  }
+  if (options.length !== 4) issues.push(`${id}: options must contain exactly 4 choices.`);
+  if (!["A", "B", "C", "D"].includes(correctAnswer)) issues.push(`${id}: correctAnswer must be A, B, C, or D.`);
+  if (correctAnswer !== expectedAnswer) issues.push(`${id}: correctAnswer must be the pre-assigned letter ${expectedAnswer}.`);
+
+  if (options.length === 4 && ["A", "B", "C", "D"].includes(correctAnswer)) {
+    const correctIndex = ["A", "B", "C", "D"].indexOf(correctAnswer);
+    const correctOptionWord = optionWord(options[correctIndex] || "");
+
+    if (correctOptionWord.toLowerCase() !== expectedWord.toLowerCase()) {
+      issues.push(`${id}: the option at (${expectedAnswer}) must exactly be "${expectedWord}".`);
+    }
+
+    const bareWords = options.map(optionWord).map(w => w.toLowerCase());
+    if (new Set(bareWords).size !== 4) issues.push(`${id}: options must be four distinct words or phrases.`);
+    if (bareWords.some(w => !w)) issues.push(`${id}: all options must be non-empty.`);
+  }
+
+  if (!String(q.explanation || "").trim()) issues.push(`${id}: explanation is missing.`);
+
+  return issues;
+}
+
+function validateVocabSuite(data: any, targetWords: any[], answerKey: string[]): string[] {
+  const questions = data?.vocabQuestions;
+  const issues: string[] = [];
+
+  if (!Array.isArray(questions)) {
+    return [`vocabQuestions must be an array.`];
+  }
+
+  if (questions.length !== targetWords.length) {
+    issues.push(`vocabQuestions must contain exactly ${targetWords.length} items; received ${questions.length}.`);
+  }
+
+  questions.slice(0, targetWords.length).forEach((q: any, i: number) => {
+    issues.push(...validateVocabQuestion(q, targetWords[i], answerKey[i], i));
+  });
+
+  return issues;
+}
+
+function buildVocabPrompt(targetWords: any[], answerKey: string[], previousIssues: string[] = []) {
+  const targetList = buildTargetWordList(targetWords, answerKey);
+
+  const correctionBlock = previousIssues.length > 0
+    ? `
+PREVIOUS ATTEMPT FAILED SERVER VALIDATION.
+You MUST fix every issue below:
+${previousIssues.map((x, i) => `${i + 1}. ${x}`).join("\n")}
+`
+    : "";
+
+  const system = `You are a senior GSAT English test writer with 20+ years of experience creating official Taiwanese GSAT-style vocabulary questions. You are strict about part of speech, semantic field, collocation, and natural English.`;
+
+  const user = `${correctionBlock}
+
+Generate EXACTLY ${targetWords.length} high-quality GSAT-style vocabulary multiple-choice questions.
+
+You MUST use the target words below exactly.
+Each question must test the assigned word from the CSV.
+Do not skip any target word.
+Do not repeat any target word.
+Do not replace the target word with a synonym.
+
+TARGET WORDS FROM CSV:
+${targetList}
+
+CORE PRINCIPLE:
+The CSV provides the target word, its part of speech, and its Chinese meaning.
+You MUST use all three:
+1. Use the target word as the correct answer.
+2. Use the CSV POS to control grammar and all options.
+3. Use the Chinese meaning to infer the semantic field and create professional distractors.
+
+MANDATORY PROCESS FOR EACH QUESTION:
+
+STEP 1 — Understand the target word.
+For each assigned word:
+- Read its English word.
+- Read its POS from CSV.
+- Read its Chinese meaning from CSV.
+- Infer a semantic category from the meaning.
+Examples:
+testimony / n. / 證詞 → legal communication
+durability / n. / 耐久性 → product quality
+visual / adj. / 視覺的 → perception / presentation mode
+alleviate / v. / 減輕 → reduce a problem, pain, or burden
+
+STEP 2 — Write a natural GSAT-level sentence.
+- The sentence must contain exactly one blank: ______
+- The blank must require the CSV POS grammatically.
+- The context must fit the Chinese meaning.
+- The sentence must sound like authentic academic or formal English.
+- The sentence must be realistic, natural, and factually reasonable.
+- Avoid artificial phrases, childish examples, and strange situations.
+
+STEP 3 — Create high-quality distractors.
+The 3 distractors must:
+- Have the SAME POS as the CSV POS.
+- Be similar in difficulty.
+- Belong to the SAME or closely related semantic field inferred from the Chinese meaning.
+- Be plausible enough that students must read the sentence carefully.
+- Be wrong because of meaning, collocation, usage, or context.
+
+FORBIDDEN DISTRACTORS:
+- Random unrelated words.
+- Random scientific terms, weather words, food names, animals, or objects.
+- Words from totally different semantic fields.
+- Extremely rare or obscure words.
+- Mixed part-of-speech options.
+- Options that make the question absurdly easy.
+
+BAD:
+Target: testimony / n. / 證詞
+Options: testimony / rainfall / hydrogen / smog
+Reason: all are nouns, but they are semantically unrelated and unprofessional.
+
+GOOD:
+Target: testimony / n. / 證詞
+Options: testimony / allegation / confession / statement
+Reason: all are legal or communication-related nouns.
+
+BAD:
+Target: visual / adj. / 視覺的
+Sentence: With visual aids, the professor...
+Reason: the answer word appears in the question.
+
+GOOD:
+Target: visual / adj. / 視覺的
+Sentence: The lecturer used ______ aids to help students understand the complex structure of the human eye.
+Options: visual / verbal / auditory / textual
+Reason: all are adjective options related to modes of communication or perception.
+
+ANTI-LEAK RULE:
+The target word MUST NOT appear anywhere in the question sentence.
+Do not include direct morphological variants either.
+If the target word appears in the sentence, the item fails.
+
+ANSWER POSITION RULE:
+The correct answer must be placed at the exact pre-assigned answer position for that question.
+The correct option text must exactly match the assigned target word.
+
+QUALITY CHECK BEFORE RETURNING:
+For every question, verify:
+1. It tests the exact assigned CSV word.
+2. The answer is placed at the assigned letter.
+3. The sentence contains exactly one blank.
+4. The target word does not appear in the sentence.
+5. All options have the same POS as the CSV POS.
+6. Distractors are semantically related to the Chinese meaning.
+7. The sentence is natural and GSAT-appropriate.
+8. Only one answer is defensible.
+9. The explanation teaches the semantic and grammatical reason.
+
+FORMAT:
+- id: "v1" through "v${targetWords.length}"
+- question: one complete sentence with exactly "______"
+- options: ["(A) word", "(B) word", "(C) word", "(D) word"]
+- correctAnswer: bare letter only: "A", "B", "C", or "D"
+- wordTested: exact CSV target word
+- explanation: Traditional Chinese. Explain:
+  1. why the correct answer fits the sentence,
+  2. how it relates to the CSV Chinese meaning,
+  3. why each distractor is not the best answer.
+
+Return ONLY this JSON shape:
+{
+  "vocabQuestions": [
+    {
+      "id": "v1",
+      "question": "... ______ ...",
+      "options": ["(A) ...", "(B) ...", "(C) ...", "(D) ..."],
+      "correctAnswer": "A",
+      "wordTested": "...",
+      "explanation": "..."
+    }
+  ]
+}`;
+
+  return { system, user };
 }
 
 // ── Health ────────────────────────────────────────────────────
-app.get("/api/health", (req, res) => res.json({ status: "ok" }));
+app.get("/api/health", (_req, res) => res.json({ status: "ok" }));
 
-// ── Vocab ─────────────────────────────────────────────────────
+// ── Vocab: strict CSV word/POS/meaning-based GSAT generator ────
 app.post("/api/generate-vocab", async (req, res) => {
   try {
     const { vocabList } = req.body;
     verifyApiKeys();
 
-    const vocabString = vocabList?.length > 0
-      ? vocabList.map((vw: any) => `"${vw.word}" (POS: ${vw.pos || "unspecified"})`).join(", ")
-      : "standard GSAT Level 3-6 vocabulary";
+    const targetWords = pickTargetWords(vocabList || [], 10);
+    if (targetWords.length === 0) {
+      throw new Error("No usable vocabulary words were provided.");
+    }
 
-    // Pre-assign answer positions server-side so AI cannot default to A
-    const answerKey = makeAnswerKey(10, ["A","B","C","D"]);
-    const assignmentList = answerKey.map((ans, i) => `Q${i+1} → ${ans}`).join(", ");
-
-    const system = `You are an expert GSAT English question writer for Taiwan high school students. You write precise, professional, unambiguous multiple-choice vocabulary questions at GSAT difficulty level.`;
-
-    const user = `Generate EXACTLY 10 GSAT-style vocabulary fill-in-the-blank questions using words from: ${vocabString}
-
-The correct answer positions have been pre-assigned for you. You MUST place the correct answer at exactly these positions:
-${assignmentList}
-
-MANDATORY PROCESS — follow these steps for EACH question:
-
-STEP 1: Identify the word to test and its part of speech (noun/verb/adjective/adverb).
-
-STEP 2: Write a sentence where:
-- The blank position REQUIRES that exact part of speech grammatically.
-- The surrounding context (collocations, subject matter, grammar structure) makes ONLY the correct word fit.
-- The sentence is factually accurate, professionally written, and natural academic English.
-- The sentence could appear in a real GSAT exam paper without modification.
-- CRITICAL: The correct answer word (or any of its morphological variants — e.g. if answer is "surrender", also exclude "surrendered", "surrendering") must NOT appear anywhere in the sentence.
-
-STEP 3: Choose 3 distractors that are:
-- The SAME part of speech as the correct answer.
-- Plausible at first glance but clearly wrong when the full sentence context is considered.
-- NOT interchangeable with the correct answer in this specific sentence.
-
-STEP 4: Test every distractor by mentally substituting it into the blank:
-- If ANY distractor produces a grammatically correct, meaningfully plausible sentence → the question FAILS.
-- Rewrite the sentence with tighter collocational or contextual constraints until all distractors fail this test.
-
-NATURALNESS STANDARDS — every sentence must pass ALL of these:
-- Grammatically correct with NO errors.
-- Factually accurate (e.g. do not say scientists "invade" cells; use "penetrate" or "infect").
-- Contextually coherent — the sentence topic must logically call for the tested word.
-- Free of awkward phrasing, unnatural word order, or implausible scenarios.
-- Appropriate for academic use — no slang, colloquialisms, or culturally inappropriate content.
-
-BAD example (fails multiple standards):
-"The ______ of the project will determine its success." with options (A) economic (B) annual (C) eventual (D) flexible
-— FAILS because: blank needs a noun but all options are adjectives; multiple options could arguably fit.
-
-GOOD example (passes all standards):
-"The marine biologist spent a decade documenting the ______ patterns of deep-sea creatures that had never been observed before."
-with options (A) migration (B) flexible (C) evaluate (D) splendid
-— PASSES because: blank clearly needs a noun (patterns of X); "migration patterns" is a natural collocation; "flexible/evaluate/splendid" are wrong POS or clearly don't collocate.
-
-FORMAT:
-- "question": complete sentence with exactly "______" (six underscores) as the blank.
-- "options": ["(A) word", "(B) word", "(C) word", "(D) word"] — single words only, ALL same POS.
-- "correctAnswer": the pre-assigned bare letter for that question number — NO parentheses.
-- "wordTested": the correct answer word.
-- "explanation": Traditional Chinese — explain why the correct word fits semantically and grammatically, and why each distractor specifically fails in this sentence.
-- "id": "v1" through "v10".
-
-FINAL CHECK: The array must contain EXACTLY 10 items. Count them before returning. Remove any item beyond 10.
-
-Return JSON: { "vocabQuestions": [ ...EXACTLY 10 items... ] }`;
+    const answerKey = makeAnswerKey(targetWords.length, ["A", "B", "C", "D"]);
 
     const schema = {
       type: Type.OBJECT,
@@ -193,25 +441,39 @@ Return JSON: { "vocabQuestions": [ ...EXACTLY 10 items... ] }`;
       required: ["vocabQuestions"]
     };
 
-    let data = process.env.OPENAI_API_KEY ? await callOpenAIHighQuality(system, user) : await callGemini(user, schema);
+    let lastIssues: string[] = [];
+    let data: any = null;
 
-    // Server-side guards
-    if (data.vocabQuestions) {
-      // Hard cap at 10
-      if (data.vocabQuestions.length > 10) {
-        data.vocabQuestions = data.vocabQuestions.slice(0, 10);
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      const { system, user } = buildVocabPrompt(targetWords, answerKey, lastIssues);
+      data = process.env.OPENAI_API_KEY
+        ? await callOpenAIHighQuality(system, user)
+        : await callGemini(user, schema);
+
+      if (data?.vocabQuestions?.length > targetWords.length) {
+        data.vocabQuestions = data.vocabQuestions.slice(0, targetWords.length);
       }
-      // Flag any question where the answer word appears in the sentence
-      data.vocabQuestions = data.vocabQuestions.map((q: any) => {
-        const answerWord = (q.wordTested || "").toLowerCase();
-        const questionText = (q.question || "").toLowerCase();
-        if (answerWord && questionText.includes(answerWord)) {
-          // Mark for client to show warning — don't silently drop
-          q._warning = `Answer word "${q.wordTested}" appears in the question sentence.`;
-        }
-        return q;
+
+      lastIssues = validateVocabSuite(data, targetWords, answerKey);
+      if (lastIssues.length === 0) break;
+    }
+
+    if (lastIssues.length > 0) {
+      console.error("Vocab validation failed:", lastIssues);
+      return res.status(422).json({
+        success: false,
+        error: "The generated vocabulary questions did not pass quality validation. Please try generating again.",
+        details: lastIssues.slice(0, 15)
       });
     }
+
+    data.vocabQuestions = data.vocabQuestions.map((q: any, idx: number) => ({
+      ...q,
+      id: `v${idx + 1}`,
+      options: normalizeOptions(q.options),
+      correctAnswer: normalizeAnswer(q.correctAnswer),
+      wordTested: targetWords[idx].word
+    }));
 
     res.json({ success: true, data });
   } catch (error: any) {
@@ -220,167 +482,19 @@ Return JSON: { "vocabQuestions": [ ...EXACTLY 10 items... ] }`;
   }
 });
 
-// ── Cloze ─────────────────────────────────────────────────────
-app.post("/api/generate-cloze", async (req, res) => {
-  try {
-    const { vocabList } = req.body;
-    verifyApiKeys();
-
-    const vocabString = vocabList?.length > 0
-      ? vocabList.map((vw: any) => `"${vw.word}"`).join(", ")
-      : "standard GSAT vocabulary";
-
-    const answerKey = makeAnswerKey(5, ["A","B","C","D"]);
-    const assignmentList = answerKey.map((ans, i) => `Gap ${11+i} → ${ans}`).join(", ");
-
-    const system = `You are an expert GSAT English cloze passage writer for Taiwan high school exams.`;
-
-    const user = `Generate 1 GSAT-style cloze passage (綜合測驗) referencing vocabulary: ${vocabString}
-
-Pre-assigned correct answer positions: ${assignmentList}
-
-MANDATORY PROCESS:
-
-STEP 1: Choose an engaging, specific topic (e.g. a scientific discovery, a cultural practice, a psychological finding, a historical event). Write a 150-180 word article that reads like a real magazine piece.
-
-STEP 2: Identify 5 natural positions in the passage for blanks. Each blank should test a different linguistic category:
-- 1-2 vocabulary items (specific word meaning in context)
-- 1-2 grammar or collocation items (preposition, verb form, fixed phrase)
-- 1 discourse connector (transition word or phrase connecting ideas)
-
-STEP 3: For each blank, write 4 options and place the correct one at the pre-assigned letter position.
-- Options may be single words OR short phrases (2-3 words).
-- Test each distractor: substituting it must produce either a grammatically wrong or semantically implausible sentence.
-- If any distractor passes the test, adjust the surrounding sentence context to eliminate the ambiguity.
-
-STEP 4: Number blanks inline as __ 11 __, __ 12 __, __ 13 __, __ 14 __, __ 15 __ within the passage text.
-
-NATURALNESS STANDARDS:
-- The passage must be factually accurate and professionally written.
-- Every sentence (including those with blanks filled in) must be natural English.
-- The passage must flow coherently as a whole — ideas connect logically between sentences.
-- No awkward phrasing, no implausible scenarios, no factual errors.
-
-FORMAT per question: gapNumber (integer 11-15), options (4 strings), correctAnswer (bare letter), category, explanation (Traditional Chinese).
-
-VERIFY before returning: passage contains EXACTLY 5 blank tokens __ 11 __ through __ 15 __.
-
-Return JSON: { "clozeSuite": { "passage": "...", "questions": [...exactly 5 items...] } }`;
-
-    const schema = {
-      type: Type.OBJECT,
-      properties: {
-        clozeSuite: {
-          type: Type.OBJECT,
-          properties: {
-            passage: { type: Type.STRING },
-            questions: {
-              type: Type.ARRAY,
-              items: {
-                type: Type.OBJECT,
-                properties: {
-                  gapNumber: { type: Type.INTEGER },
-                  options: { type: Type.ARRAY, items: { type: Type.STRING } },
-                  correctAnswer: { type: Type.STRING },
-                  category: { type: Type.STRING },
-                  explanation: { type: Type.STRING }
-                },
-                required: ["gapNumber", "options", "correctAnswer", "category", "explanation"]
-              }
-            }
-          },
-          required: ["passage", "questions"]
-        }
-      },
-      required: ["clozeSuite"]
-    };
-
-    const data = process.env.OPENAI_API_KEY ? await callOpenAI(system, user) : await callGemini(user, schema);
-    res.json({ success: true, data });
-  } catch (error: any) {
-    console.error("Cloze error:", error);
-    res.status(500).json({ success: false, error: error.message });
-  }
+// Old endpoints intentionally disabled because the current app supports only vocab + reading.
+app.post("/api/generate-cloze", async (_req, res) => {
+  res.status(410).json({
+    success: false,
+    error: "Cloze generation has been disabled. This app now supports Vocabulary MCQ and Reading Comprehension only."
+  });
 });
 
-// ── Blank Matching ────────────────────────────────────────────
-app.post("/api/generate-matching", async (req, res) => {
-  try {
-    const { vocabList } = req.body;
-    verifyApiKeys();
-
-    const vocabString = vocabList?.length > 0
-      ? vocabList.map((vw: any) => `"${vw.word}"`).join(", ")
-      : "standard GSAT vocabulary";
-
-    const system = `You are an expert GSAT English blank-matching passage writer for Taiwan high school exams.`;
-
-    const user = `Generate 1 GSAT-style blank matching passage (文意選填) referencing vocabulary: ${vocabString}
-
-MANDATORY PROCESS — follow these steps in order:
-
-STEP 1: Plan your 10 blanks BEFORE writing the passage.
-List exactly 10 words you will blank out, one for each position 16-25:
-- Blank 16: [word] — part of speech: [POS]
-- Blank 17: [word] — part of speech: [POS]
-- Blank 18: [word] — part of speech: [POS]
-- Blank 19: [word] — part of speech: [POS]
-- Blank 20: [word] — part of speech: [POS]
-- Blank 21: [word] — part of speech: [POS]
-- Blank 22: [word] — part of speech: [POS]
-- Blank 23: [word] — part of speech: [POS]
-- Blank 24: [word] — part of speech: [POS]
-- Blank 25: [word] — part of speech: [POS]
-
-STEP 2: Write the passage (220-260 words) incorporating all 10 blanked words naturally.
-- Replace each planned word with its blank token: __ 16 __, __ 17 __, ..., __ 25 __
-- Every blank must fit naturally — the surrounding sentence must be grammatically correct and meaningful both with the answer and within the passage context.
-- The passage must read like a real magazine article on an interesting topic (science, culture, nature, psychology, history, technology).
-- Each sentence containing a blank must provide enough context to make the correct answer unambiguous, but not so obvious that the blank is trivial.
-
-STEP 3: Create the 10 candidate options (A)-(J).
-- Include all 10 answer words, each labeled (A) through (J) in random order.
-- Add deceptive distractors only if you have fewer than 10 answer words — each distractor must be clearly wrong for all 10 blanks due to grammar or meaning.
-- Mix single words and short 2-3 word phrases.
-- Include similar-looking pairs to challenge students (e.g. two verbs with different collocations, two nouns from similar semantic fields).
-
-STEP 4: Build the answers array.
-- "answers": exactly 10 letters [A-J], one per blank in order from blank 16 to blank 25.
-- Each letter A through J appears EXACTLY once.
-
-STEP 5: Write 10 Traditional Chinese explanations, one per blank (16-25).
-
-QUALITY STANDARDS:
-- Every sentence must be natural, factually accurate, and professionally written English.
-- No sentence should be awkward, implausible, or culturally inappropriate.
-- The correct answer for each blank must be the ONLY option that fits — test each of the other 9 options against the blank to confirm they do not fit grammatically or semantically.
-- FINAL COUNT CHECK: passage must contain exactly the tokens __ 16 __, __ 17 __, __ 18 __, __ 19 __, __ 20 __, __ 21 __, __ 22 __, __ 23 __, __ 24 __, __ 25 __ — all 10, no more, no less.
-
-Return JSON: { "blankMatchingSuite": { "passage": "...", "options": [...exactly 10 strings (A)-(J)...], "answers": [...exactly 10 letters A-J...], "explanations": [...exactly 10 Traditional Chinese strings...] } }`;
-
-    const schema = {
-      type: Type.OBJECT,
-      properties: {
-        blankMatchingSuite: {
-          type: Type.OBJECT,
-          properties: {
-            passage: { type: Type.STRING },
-            options: { type: Type.ARRAY, items: { type: Type.STRING } },
-            answers: { type: Type.ARRAY, items: { type: Type.STRING } },
-            explanations: { type: Type.ARRAY, items: { type: Type.STRING } }
-          },
-          required: ["passage", "options", "answers", "explanations"]
-        }
-      },
-      required: ["blankMatchingSuite"]
-    };
-
-    const data = process.env.OPENAI_API_KEY ? await callOpenAI(system, user) : await callGemini(user, schema);
-    res.json({ success: true, data });
-  } catch (error: any) {
-    console.error("Matching error:", error);
-    res.status(500).json({ success: false, error: error.message });
-  }
+app.post("/api/generate-matching", async (_req, res) => {
+  res.status(410).json({
+    success: false,
+    error: "Blank matching generation has been disabled. This app now supports Vocabulary MCQ and Reading Comprehension only."
+  });
 });
 
 // ── Reading ───────────────────────────────────────────────────
@@ -390,45 +504,56 @@ app.post("/api/generate-reading", async (req, res) => {
     verifyApiKeys();
 
     const levels = selectedReadingLevels?.length > 0 ? selectedReadingLevels : ["essential"];
-    const vocabString = vocabList?.length > 0
-      ? vocabList.map((vw: any) => `"${vw.word}"`).join(", ")
+    const cleanWords = (Array.isArray(vocabList) ? vocabList : [])
+      .filter((vw: any) => vw?.word)
+      .slice(0, 60)
+      .map((vw: any) => `"${vw.word}" (POS: ${vw.pos || "unspecified"}; Meaning: ${vw.meaning || "unspecified"})`);
+
+    const vocabString = cleanWords.length > 0
+      ? cleanWords.join(", ")
       : "standard GSAT vocabulary";
 
-    // Pre-assign answer positions for each passage
-    const passageKeys = levels.map(() => makeAnswerKey(4, ["A","B","C","D"]));
+    const passageKeys = levels.map(() => makeAnswerKey(4, ["A", "B", "C", "D"]));
     const keyDescriptions = levels.map((lvl: string, i: number) =>
       `${lvl} passage: Q1→${passageKeys[i][0]}, Q2→${passageKeys[i][1]}, Q3→${passageKeys[i][2]}, Q4→${passageKeys[i][3]}`
     ).join("; ");
 
-    const system = `You are an expert GSAT English reading comprehension writer for Taiwan high school exams.`;
+    const system = `You are a senior GSAT English reading comprehension writer for Taiwan high school exams. Your passages and questions must be natural, precise, and unambiguous.`;
 
-    const user = `Generate reading comprehension passages for levels: ${levels.join(", ")} using vocabulary: ${vocabString}
+    const user = `Generate reading comprehension passages for levels: ${levels.join(", ")} using vocabulary references below:
+${vocabString}
 
 Pre-assigned correct answer positions: ${keyDescriptions}
 
 MANDATORY PROCESS for each passage:
 
-STEP 1: Choose a specific, genuinely interesting topic appropriate for the level. Write 250-300 words that read like a real academic or magazine article — engaging, informative, coherent.
+STEP 1: Choose a specific, genuinely interesting topic appropriate for the level.
+Write 250-300 words that read like a real academic or magazine article.
 
-STEP 2: Write 4 comprehension questions testing different skills:
-- Q1: Main idea or title selection
-- Q2: Specific detail (directly stated in the passage)
-- Q3: Vocabulary in context (meaning of a word/phrase as used in the passage)
-- Q4: Inference or author's purpose
+STEP 2: Naturally incorporate some vocabulary from the reference list when appropriate.
+Use the CSV meanings to avoid misusing words.
 
-STEP 3: For each question, write 4 options and place the correct one at the pre-assigned letter position.
-- Each correct answer must be directly and unambiguously supported by the passage text.
-- Each distractor must be clearly wrong — either contradicted by the passage, not mentioned, or a plausible-sounding misreading.
-- Options can be full sentences or short phrases as appropriate.
+STEP 3: Write 4 comprehension questions:
+- Q1: Main idea or best title
+- Q2: Specific detail directly supported by the passage
+- Q3: Vocabulary or phrase in context
+- Q4: Inference, author's purpose, or implication
 
-NATURALNESS AND ACCURACY STANDARDS:
-- Passage content must be factually accurate.
-- Every sentence must be natural, professionally written English.
-- Questions must be clearly worded with no ambiguity.
-- Correct answers must be the ONLY defensible choice given the passage text.
-- Distractors must not be accidentally correct due to general knowledge outside the passage.
+STEP 4: For each question, write 4 options and place the correct one at the pre-assigned letter.
+- Each correct answer must be directly and unambiguously supported by the passage.
+- Each distractor must be clearly wrong: contradicted, not mentioned, too broad, too narrow, or a plausible misreading.
+- Avoid choices that are correct due to outside general knowledge.
 
-FORMAT: level, title, passage (250-300 words), questions (exactly 4 per passage with id/question/options/correctAnswer/explanation in Traditional Chinese).
+QUALITY STANDARDS:
+- Natural academic English.
+- Factually reasonable content.
+- No ambiguous questions.
+- No two options can both be defensible.
+- Traditional Chinese explanations must cite the relevant idea from the passage.
+
+FORMAT:
+level, title, passage, questions.
+Each question must include id, question, options, correctAnswer, explanation.
 
 Return EXACTLY ${levels.length} passage(s).
 
@@ -468,6 +593,21 @@ Return JSON: { "readingPassages": [...exactly ${levels.length} passage(s)...] }`
     };
 
     const data = process.env.OPENAI_API_KEY ? await callOpenAI(system, user) : await callGemini(user, schema);
+
+    if (Array.isArray(data?.readingPassages)) {
+      data.readingPassages = data.readingPassages.map((p: any, pIdx: number) => ({
+        ...p,
+        questions: Array.isArray(p.questions)
+          ? p.questions.slice(0, 4).map((q: any, qIdx: number) => ({
+              ...q,
+              id: q.id || `r${pIdx + 1}_${qIdx + 1}`,
+              options: normalizeOptions(q.options),
+              correctAnswer: normalizeAnswer(q.correctAnswer)
+            }))
+          : []
+      }));
+    }
+
     res.json({ success: true, data });
   } catch (error: any) {
     console.error("Reading error:", error);
@@ -488,6 +628,8 @@ Performance:
 - Vocabulary MCQ: ${scoreSummary.vocab.correct}/${scoreSummary.vocab.total}
 - Reading Comprehension: ${scoreSummary.reading.correct}/${scoreSummary.reading.total}
 - Level: ${selectedLevel || "Mixed"}
+
+The feedback should be specific, warm, and practical. Mention vocabulary discrimination, collocation awareness, semantic-field distractors, and reading strategy when relevant.
 
 Return JSON: { "greeting": string, "analysis": string, "tips": [string, string, string], "encouragement": string }`;
 
