@@ -1,513 +1,745 @@
-import express from "express";
-import { GoogleGenAI, Type } from "@google/genai";
-import OpenAI from "openai";
-import dotenv from "dotenv";
+/**
+ * @license
+ * SPDX-License-Identifier: Apache-2.0
+ */
 
-dotenv.config();
+import React, { useState, useEffect } from "react";
+import {
+  Sparkles, GraduationCap, Layers, Settings, CheckCircle, Award,
+  History, RefreshCw, AlertCircle, Printer, ArrowRight
+} from "lucide-react";
+import { fetchAndParseCSV, padVocabularyIfNecessary } from "./utils/csvFetcher";
+import { normalizeOptions, normalizeAnswer } from "./utils/helpers";
+import { VocabWord, GeneratedExamSuite, PracticeSessionState, ProgressReport } from "./types";
+import WorksheetExport from "./components/WorksheetExport";
+import ProgressReportView from "./components/ProgressReportView";
 
-const app = express();
-app.use(express.json({ limit: "20mb" }));
+const REASSURING_MESSAGES = [
+  "正在剖析大數據：挑選最適合學測程度的精選搭配詞...",
+  "杜老師正在為你研擬高擬真的學測字彙單選題...",
+  "正在確保每道題目語意精準、答案無歧義...",
+  "正在為你編寫多層次閱讀測驗：基本、精實、進階...",
+  "正在由杜老師審對答案及 Traditional Chinese 專業詳解中..."
+];
 
-let aiInstance: GoogleGenAI | null = null;
-function getGenAI(): GoogleGenAI {
-  if (!aiInstance) {
-    const apiKey = process.env.GEMINI_API_KEY;
-    if (!apiKey) throw new Error("GEMINI_API_KEY is not defined.");
-    aiInstance = new GoogleGenAI({ apiKey });
-  }
-  return aiInstance;
-}
+export default function App() {
+  const [activeTab, setActiveTab] = useState<"lobby" | "player" | "worksheet" | "report">("lobby");
+  const [showSubmitConfirm, setShowSubmitConfirm] = useState(false);
 
-let openaiInstance: OpenAI | null = null;
-function getOpenAI(): OpenAI {
-  if (!openaiInstance) {
-    const apiKey = process.env.OPENAI_API_KEY;
-    if (!apiKey) throw new Error("OPENAI_API_KEY is not defined.");
-    openaiInstance = new OpenAI({ apiKey });
-  }
-  return openaiInstance;
-}
+  const [vocabSource, setVocabSource] = useState<"system" | "self-input">("system");
+  const [selectedLevel, setSelectedLevel] = useState<number>(4);
+  const [availableWords, setAvailableWords] = useState<VocabWord[]>([]);
+  const [loadingCSV, setLoadingCSV] = useState<boolean>(false);
+  const [selectedUnits, setSelectedUnits] = useState<string[]>([]);
+  const [unitSearch, setUnitSearch] = useState<string>("");
+  const [unitsDropdownOpen, setUnitsDropdownOpen] = useState<boolean>(false);
 
-function verifyApiKeys() {
-  if (!process.env.GEMINI_API_KEY && !process.env.OPENAI_API_KEY) {
-    throw new Error("Please configure GEMINI_API_KEY or OPENAI_API_KEY.");
-  }
-}
+  const [selfInputText, setSelfInputText] = useState<string>(
+    "accommodate v.\nvital adj.\nsystem n.\nalleviate v.\ncomprehensive adj.\ncoincide v.\ndevastate v.\nexaggerate v.\npersistent adj.\nversatile adj."
+  );
 
-async function callOpenAIHighQuality(system: string, user: string): Promise<any> {
-  const openai = getOpenAI();
-  const response = await openai.chat.completions.create({
-    model: "gpt-4o",  // Use full GPT-4o for question quality — mini cannot reliably produce unambiguous exam questions
-    messages: [
-      { role: "system", content: system },
-      { role: "user", content: user + "\n\nCRITICAL: Return ONLY a valid JSON object. No markdown, no preamble." }
-    ],
-    response_format: { type: "json_object" },
-    temperature: 0.7,
+  const [selectedExerciseTypes, setSelectedExerciseTypes] = useState({
+    vocab: true, reading: true
   });
-  return JSON.parse((response.choices[0].message.content || "").trim());
-}
+  const [selectedReadingLevels, setSelectedReadingLevels] = useState<string[]>(["essential"]);
 
-// Standard quality calls — used for cloze, matching, reading, report
-async function callOpenAI(system: string, user: string): Promise<any> {
-  const openai = getOpenAI();
-  const model = process.env.OPENAI_API_MODEL || "gpt-4o-mini";
-  const response = await openai.chat.completions.create({
-    model,
-    messages: [
-      { role: "system", content: system },
-      { role: "user", content: user + "\n\nCRITICAL: Return ONLY a valid JSON object. No markdown, no preamble." }
-    ],
-    response_format: { type: "json_object" },
-    temperature: 0.7,
+  const [examSuite, setExamSuite] = useState<GeneratedExamSuite | null>(null);
+  const [generationLoading, setGenerationLoading] = useState<boolean>(false);
+  const [loadingStepMsg, setLoadingStepMsg] = useState<string>("");
+  const [generationError, setGenerationError] = useState<string | null>(null);
+
+  const [session, setSession] = useState<PracticeSessionState>({
+    answers: { vocab: {}, reading: {} },
+    submitted: false,
+    startTime: 0
   });
-  return JSON.parse((response.choices[0].message.content || "").trim());
-}
+  const [currentSection, setCurrentSection] = useState<"vocab" | "reading">("vocab");
 
-async function callGemini(prompt: string, schema: any): Promise<any> {
-  const ai = getGenAI();
-  const response = await ai.models.generateContent({
-    model: "gemini-2.0-flash",
-    contents: prompt,
-    config: {
-      systemInstruction: "You are Tr. Shirley Du, an elite GSAT English educator in Taiwan. Return ONLY valid JSON matching the schema exactly.",
-      responseMimeType: "application/json",
-      responseSchema: schema,
-      temperature: 0.7,
-    },
-  });
-  if (!response.text) throw new Error("Empty response from Gemini.");
-  return JSON.parse(response.text.trim());
-}
+  const [studyHistory, setStudyHistory] = useState<ProgressReport[]>([]);
+  const [activeReport, setActiveReport] = useState<ProgressReport | null>(null);
 
-// Randomly shuffle a small answer key for pre-assignment
-function makeAnswerKey(n: number, letters: string[]): string[] {
-  const key: string[] = [];
-  const perLetter = Math.floor(n / letters.length);
-  const pool: string[] = [];
-  for (const l of letters) {
-    for (let i = 0; i < perLetter; i++) pool.push(l);
-  }
-  // Fill remainder
-  let i = 0;
-  while (pool.length < n) { pool.push(letters[i++ % letters.length]); }
-  // Fisher-Yates shuffle
-  for (let j = pool.length - 1; j > 0; j--) {
-    const k = Math.floor(Math.random() * (j + 1));
-    [pool[j], pool[k]] = [pool[k], pool[j]];
-  }
-  return pool.slice(0, n);
-}
+  useEffect(() => {
+    let interval: NodeJS.Timeout;
+    if (generationLoading) {
+      let idx = 0;
+      setLoadingStepMsg(REASSURING_MESSAGES[0]);
+      interval = setInterval(() => {
+        idx = (idx + 1) % REASSURING_MESSAGES.length;
+        setLoadingStepMsg(REASSURING_MESSAGES[idx]);
+      }, 4000);
+    }
+    return () => clearInterval(interval);
+  }, [generationLoading]);
 
-// ── Health ────────────────────────────────────────────────────
-app.get("/api/health", (req, res) => res.json({ status: "ok" }));
+  useEffect(() => {
+    if (vocabSource === "system") loadSystemWords(selectedLevel);
+  }, [selectedLevel, vocabSource]);
 
-// ── Vocab ─────────────────────────────────────────────────────
-app.post("/api/generate-vocab", async (req, res) => {
-  try {
-    const { vocabList } = req.body;
-    verifyApiKeys();
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem("gsat_buffet_history");
+      if (saved) setStudyHistory(JSON.parse(saved));
+    } catch (e) { console.error(e); }
+  }, []);
 
-    const vocabString = vocabList?.length > 0
-      ? vocabList.map((vw: any) => `"${vw.word}" (POS: ${vw.pos || "unspecified"})`).join(", ")
-      : "standard GSAT Level 3-6 vocabulary";
+  const loadSystemWords = async (level: number) => {
+    setLoadingCSV(true);
+    try {
+      const words = await fetchAndParseCSV(level);
+      setAvailableWords(words);
+      const uniqueUnits = Array.from(new Set<string>(words.map(w => w.unit)))
+        .sort((a, b) => parseInt(a) - parseInt(b));
+      setSelectedUnits(uniqueUnits.slice(0, 3));
+    } catch (err) { console.error(err); }
+    finally { setLoadingCSV(false); }
+  };
 
-    // Pre-assign answer positions server-side so AI cannot default to A
-    const answerKey = makeAnswerKey(10, ["A","B","C","D"]);
-    const assignmentList = answerKey.map((ans, i) => `Q${i+1} → ${ans}`).join(", ");
+  const parseSelfInputList = (): { word: string; pos?: string; meaning?: string }[] => {
+    const list: { word: string; pos?: string; meaning?: string }[] = [];
+    for (const line of selfInputText.split("\n")) {
+      const cleanLine = line.trim();
+      if (!cleanLine) continue;
+      const posRegex = /\b(v|adj|n|adv|prep|pron|conj|v\.|adj\.|n\.|adv\.|prep\.|pron\.|conj\.)\b/i;
+      const matchPos = cleanLine.match(posRegex);
+      let pos: string | undefined;
+      let word = "";
+      let remaining = "";
+      if (matchPos && matchPos.index !== undefined) {
+        pos = matchPos[1].replace(".", "").toLowerCase();
+        word = cleanLine.substring(0, matchPos.index).trim();
+        remaining = cleanLine.substring(matchPos.index + matchPos[0].length).trim();
+      } else {
+        const tokens = cleanLine.split(/\s+/);
+        const englishTokens = tokens.filter(t => /^[a-zA-Z\s-]+$/.test(t));
+        word = englishTokens.join(" ").trim();
+        remaining = "";
+      }
+      word = word.replace(/^[^a-zA-Z]+|[^a-zA-Z\s-]+$/g, "").trim();
+      const meaning = remaining.replace(/^[-:\s~;]+/g, "").trim();
+      if (word) list.push({ word, pos, meaning: meaning || undefined });
+    }
+    return list;
+  };
 
-    const system = `You are an expert GSAT English question writer for Taiwan high school students. You write precise, professional, unambiguous multiple-choice vocabulary questions at GSAT difficulty level.`;
+  // Calls a single section endpoint and returns its data
+  const fetchSection = async (endpoint: string, body: object): Promise<any> => {
+    const response = await fetch(endpoint, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({}));
+      throw new Error(err.error || `${endpoint} failed`);
+    }
+    const res = await response.json();
+    if (!res.success) throw new Error(res.error || `${endpoint} returned failure`);
+    return res.data;
+  };
 
-    const user = `Generate EXACTLY 10 GSAT-style vocabulary fill-in-the-blank questions using words from: ${vocabString}
+  const handleGenerateExam = async () => {
+    setGenerationError(null);
+    setGenerationLoading(true);
 
-The correct answer positions have been pre-assigned for you. You MUST place the correct answer at exactly these positions:
-${assignmentList}
+    try {
+      let finalVocabList: { word: string; pos?: string; meaning?: string; level?: number; unit?: string }[] = [];
+      let sourceCount = 0;
 
-MANDATORY PROCESS — follow these steps for EACH question:
-
-STEP 1: Identify the word to test and its part of speech (noun/verb/adjective/adverb).
-
-STEP 2: Write a sentence where:
-- The blank position REQUIRES that exact part of speech grammatically.
-- The surrounding context (collocations, subject matter, grammar structure) makes ONLY the correct word fit.
-- The sentence is factually accurate, professionally written, and natural academic English.
-- The sentence could appear in a real GSAT exam paper without modification.
-- CRITICAL: The correct answer word (or any of its morphological variants — e.g. if answer is "surrender", also exclude "surrendered", "surrendering") must NOT appear anywhere in the sentence.
-
-STEP 3: Choose 3 distractors that are:
-- The SAME part of speech as the correct answer.
-- Plausible at first glance but clearly wrong when the full sentence context is considered.
-- NOT interchangeable with the correct answer in this specific sentence.
-
-STEP 4: Test every distractor by mentally substituting it into the blank:
-- If ANY distractor produces a grammatically correct, meaningfully plausible sentence → the question FAILS.
-- Rewrite the sentence with tighter collocational or contextual constraints until all distractors fail this test.
-
-NATURALNESS STANDARDS — every sentence must pass ALL of these:
-- Grammatically correct with NO errors.
-- Factually accurate (e.g. do not say scientists "invade" cells; use "penetrate" or "infect").
-- Contextually coherent — the sentence topic must logically call for the tested word.
-- Free of awkward phrasing, unnatural word order, or implausible scenarios.
-- Appropriate for academic use — no slang, colloquialisms, or culturally inappropriate content.
-
-BAD example (fails multiple standards):
-"The ______ of the project will determine its success." with options (A) economic (B) annual (C) eventual (D) flexible
-— FAILS because: blank needs a noun but all options are adjectives; multiple options could arguably fit.
-
-GOOD example (passes all standards):
-"The marine biologist spent a decade documenting the ______ patterns of deep-sea creatures that had never been observed before."
-with options (A) migration (B) flexible (C) evaluate (D) splendid
-— PASSES because: blank clearly needs a noun (patterns of X); "migration patterns" is a natural collocation; "flexible/evaluate/splendid" are wrong POS or clearly don't collocate.
-
-FORMAT:
-- "question": complete sentence with exactly "______" (six underscores) as the blank.
-- "options": ["(A) word", "(B) word", "(C) word", "(D) word"] — single words only, ALL same POS.
-- "correctAnswer": the pre-assigned bare letter for that question number — NO parentheses.
-- "wordTested": the correct answer word.
-- "explanation": Traditional Chinese — explain why the correct word fits semantically and grammatically, and why each distractor specifically fails in this sentence.
-- "id": "v1" through "v10".
-
-FINAL CHECK: The array must contain EXACTLY 10 items. Count them before returning. Remove any item beyond 10.
-
-Return JSON: { "vocabQuestions": [ ...EXACTLY 10 items... ] }`;
-
-    const schema = {
-      type: Type.OBJECT,
-      properties: {
-        vocabQuestions: {
-          type: Type.ARRAY,
-          items: {
-            type: Type.OBJECT,
-            properties: {
-              id: { type: Type.STRING },
-              question: { type: Type.STRING },
-              options: { type: Type.ARRAY, items: { type: Type.STRING } },
-              correctAnswer: { type: Type.STRING },
-              wordTested: { type: Type.STRING },
-              explanation: { type: Type.STRING }
-            },
-            required: ["id", "question", "options", "correctAnswer", "wordTested", "explanation"]
-          }
+      if (vocabSource === "system") {
+        let filteredWords = availableWords;
+        if (selectedUnits.length > 0) {
+          filteredWords = availableWords.filter(w => selectedUnits.includes(w.unit));
         }
-      },
-      required: ["vocabQuestions"]
+        const shuffled = [...filteredWords].sort(() => 0.5 - Math.random());
+        finalVocabList = shuffled.map(w => ({
+          word: w.word, pos: w.pos, meaning: w.meaning,
+          level: selectedLevel, unit: w.unit
+        }));
+        sourceCount = finalVocabList.length;
+      } else {
+        const list = parseSelfInputList();
+        if (list.length === 0) throw new Error("請先在自主輸入區塊輸入單字列表喔！");
+        const padded = list.length < 12 ? await padVocabularyIfNecessary(list, selectedLevel, 12) : list;
+        finalVocabList = padded.map(w => ({ ...w, level: selectedLevel }));
+        sourceCount = list.length;
+      }
+
+      if (finalVocabList.length === 0) throw new Error("找不到可用的單字，請重選字表級別或檢查輸入。");
+      if (!Object.values(selectedExerciseTypes).some(v => v)) throw new Error("請至少勾選一種題型！");
+
+      // Fire all selected sections in parallel
+      const promises: Promise<any>[] = [];
+      const sectionKeys: string[] = [];
+
+      if (selectedExerciseTypes.vocab) {
+        promises.push(fetchSection("/api/generate-vocab", { vocabList: finalVocabList }));
+        sectionKeys.push("vocab");
+      }
+      }
+      if (selectedExerciseTypes.reading) {
+        promises.push(fetchSection("/api/generate-reading", {
+          vocabList: finalVocabList,
+          selectedReadingLevels: selectedReadingLevels.length > 0 ? selectedReadingLevels : ["essential"]
+        }));
+        sectionKeys.push("reading");
+      }
+
+      const results = await Promise.all(promises);
+
+      // Merge results into one suite
+      const merged: any = {};
+      sectionKeys.forEach((key, i) => {
+        Object.assign(merged, results[i]);
+      });
+
+      const suite: GeneratedExamSuite = {
+        ...merged,
+        timestamp: Date.now(),
+        metadata: {
+          vocabCount: sourceCount,
+          sourceType: vocabSource,
+          selectedLevel,
+          selectedUnits: vocabSource === "system" ? selectedUnits : ["Self Input"],
+          vocabList: finalVocabList
+        }
+      };
+
+      setExamSuite(suite);
+      setSession({
+        answers: { vocab: {}, reading: {} },
+        submitted: false,
+        startTime: Date.now()
+      });
+
+      if (suite.vocabQuestions?.length > 0) setCurrentSection("vocab");
+      else if (suite.readingPassages?.length > 0) setCurrentSection("reading");
+
+      setActiveTab("player");
+    } catch (err: any) {
+      console.error(err);
+      setGenerationError(err.message || "生卷失敗，請稍後再試。");
+    } finally {
+      setGenerationLoading(false);
+    }
+  };
+
+  const handleInteractiveSubmitAnswers = () => {
+    setShowSubmitConfirm(true);
+  };
+
+  const handleConfirmedSubmit = () => {
+    setShowSubmitConfirm(false);
+    if (!examSuite) return;
+
+    const reportDetails: any[] = [];
+    const summary = {
+      vocab: { correct: 0, total: 0, score: 0 },
+      reading: { correct: 0, total: 0, score: 0 },
+      comprehensive: { correct: 0, total: 0, score: 0 }
     };
 
-    let data = process.env.OPENAI_API_KEY ? await callOpenAIHighQuality(system, user) : await callGemini(user, schema);
-
-    // Server-side guards
-    if (data.vocabQuestions) {
-      // Hard cap at 10
-      if (data.vocabQuestions.length > 10) {
-        data.vocabQuestions = data.vocabQuestions.slice(0, 10);
-      }
-      // Flag any question where the answer word appears in the sentence
-      data.vocabQuestions = data.vocabQuestions.map((q: any) => {
-        const answerWord = (q.wordTested || "").toLowerCase();
-        const questionText = (q.question || "").toLowerCase();
-        if (answerWord && questionText.includes(answerWord)) {
-          // Mark for client to show warning — don't silently drop
-          q._warning = `Answer word "${q.wordTested}" appears in the question sentence.`;
-        }
-        return q;
+    // Vocab — use index-based keys
+    if (examSuite.vocabQuestions) {
+      examSuite.vocabQuestions.forEach((q, qIndex) => {
+        const userAns = session.answers.vocab[`vocab_${qIndex}`] || "";
+        const correctAns = normalizeAnswer(q.correctAnswer);
+        const isCorrect = userAns === correctAns;
+        if (isCorrect) summary.vocab.correct++;
+        summary.vocab.total++;
+        reportDetails.push({
+          section: "vocab", questionNumberOrName: `vocab_${qIndex}`,
+          isCorrect, userAnswer: userAns, correctAnswer: correctAns,
+          questionText: q.question,
+          wordTested: q.wordTested,
+          wordMeta: examSuite.metadata?.vocabList?.find((v: any) => v.word === q.wordTested)
+        });
       });
+      summary.vocab.score = summary.vocab.total > 0 ? Math.round((summary.vocab.correct / summary.vocab.total) * 100) : 0;
     }
 
-    res.json({ success: true, data });
-  } catch (error: any) {
-    console.error("Vocab error:", error);
-    res.status(500).json({ success: false, error: error.message });
-  }
-});
+    // Reading
+    if (examSuite.readingPassages) {
+      examSuite.readingPassages.forEach((p, pIdx) => {
+        p.questions.forEach((q, qIdx) => {
+          const userKey = `${pIdx}_${qIdx}`;
+          const userAns = session.answers.reading[userKey] || "";
+          const correctAns = normalizeAnswer(q.correctAnswer);
+          const isCorrect = userAns === correctAns;
+          if (isCorrect) summary.reading.correct++;
+          summary.reading.total++;
+          reportDetails.push({
+            section: "reading", questionNumberOrName: userKey,
+            isCorrect, userAnswer: userAns, correctAnswer: correctAns,
+            questionText: `[${p.title}] ${q.question}`
+          });
+        });
+      });
+      summary.reading.score = summary.reading.total > 0 ? Math.round((summary.reading.correct / summary.reading.total) * 100) : 0;
+    }
 
-// ── Cloze ─────────────────────────────────────────────────────
-app.post("/api/generate-cloze", async (req, res) => {
-  try {
-    const { vocabList } = req.body;
-    verifyApiKeys();
-
-    const vocabString = vocabList?.length > 0
-      ? vocabList.map((vw: any) => `"${vw.word}"`).join(", ")
-      : "standard GSAT vocabulary";
-
-    const answerKey = makeAnswerKey(5, ["A","B","C","D"]);
-    const assignmentList = answerKey.map((ans, i) => `Gap ${11+i} → ${ans}`).join(", ");
-
-    const system = `You are an expert GSAT English cloze passage writer for Taiwan high school exams.`;
-
-    const user = `Generate 1 GSAT-style cloze passage (綜合測驗) referencing vocabulary: ${vocabString}
-
-Pre-assigned correct answer positions: ${assignmentList}
-
-MANDATORY PROCESS:
-
-STEP 1: Choose an engaging, specific topic (e.g. a scientific discovery, a cultural practice, a psychological finding, a historical event). Write a 150-180 word article that reads like a real magazine piece.
-
-STEP 2: Identify 5 natural positions in the passage for blanks. Each blank should test a different linguistic category:
-- 1-2 vocabulary items (specific word meaning in context)
-- 1-2 grammar or collocation items (preposition, verb form, fixed phrase)
-- 1 discourse connector (transition word or phrase connecting ideas)
-
-STEP 3: For each blank, write 4 options and place the correct one at the pre-assigned letter position.
-- Options may be single words OR short phrases (2-3 words).
-- Test each distractor: substituting it must produce either a grammatically wrong or semantically implausible sentence.
-- If any distractor passes the test, adjust the surrounding sentence context to eliminate the ambiguity.
-
-STEP 4: Number blanks inline as __ 11 __, __ 12 __, __ 13 __, __ 14 __, __ 15 __ within the passage text.
-
-NATURALNESS STANDARDS:
-- The passage must be factually accurate and professionally written.
-- Every sentence (including those with blanks filled in) must be natural English.
-- The passage must flow coherently as a whole — ideas connect logically between sentences.
-- No awkward phrasing, no implausible scenarios, no factual errors.
-
-FORMAT per question: gapNumber (integer 11-15), options (4 strings), correctAnswer (bare letter), category, explanation (Traditional Chinese).
-
-VERIFY before returning: passage contains EXACTLY 5 blank tokens __ 11 __ through __ 15 __.
-
-Return JSON: { "clozeSuite": { "passage": "...", "questions": [...exactly 5 items...] } }`;
-
-    const schema = {
-      type: Type.OBJECT,
-      properties: {
-        clozeSuite: {
-          type: Type.OBJECT,
-          properties: {
-            passage: { type: Type.STRING },
-            questions: {
-              type: Type.ARRAY,
-              items: {
-                type: Type.OBJECT,
-                properties: {
-                  gapNumber: { type: Type.INTEGER },
-                  options: { type: Type.ARRAY, items: { type: Type.STRING } },
-                  correctAnswer: { type: Type.STRING },
-                  category: { type: Type.STRING },
-                  explanation: { type: Type.STRING }
-                },
-                required: ["gapNumber", "options", "correctAnswer", "category", "explanation"]
-              }
-            }
-          },
-          required: ["passage", "questions"]
-        }
-      },
-      required: ["clozeSuite"]
+    const totalCorrect = summary.vocab.correct + summary.reading.correct;
+    const totalQuestions = summary.vocab.total + summary.reading.total;
+    summary.comprehensive = {
+      correct: totalCorrect, total: totalQuestions,
+      score: totalQuestions > 0 ? Math.round((totalCorrect / totalQuestions) * 100) : 0
     };
 
-    const data = process.env.OPENAI_API_KEY ? await callOpenAI(system, user) : await callGemini(user, schema);
-    res.json({ success: true, data });
-  } catch (error: any) {
-    console.error("Cloze error:", error);
-    res.status(500).json({ success: false, error: error.message });
-  }
-});
-
-// ── Blank Matching ────────────────────────────────────────────
-app.post("/api/generate-matching", async (req, res) => {
-  try {
-    const { vocabList } = req.body;
-    verifyApiKeys();
-
-    const vocabString = vocabList?.length > 0
-      ? vocabList.map((vw: any) => `"${vw.word}"`).join(", ")
-      : "standard GSAT vocabulary";
-
-    const system = `You are an expert GSAT English blank-matching passage writer for Taiwan high school exams.`;
-
-    const user = `Generate 1 GSAT-style blank matching passage (文意選填) referencing vocabulary: ${vocabString}
-
-MANDATORY PROCESS — follow these steps in order:
-
-STEP 1: Plan your 10 blanks BEFORE writing the passage.
-List exactly 10 words you will blank out, one for each position 16-25:
-- Blank 16: [word] — part of speech: [POS]
-- Blank 17: [word] — part of speech: [POS]
-- Blank 18: [word] — part of speech: [POS]
-- Blank 19: [word] — part of speech: [POS]
-- Blank 20: [word] — part of speech: [POS]
-- Blank 21: [word] — part of speech: [POS]
-- Blank 22: [word] — part of speech: [POS]
-- Blank 23: [word] — part of speech: [POS]
-- Blank 24: [word] — part of speech: [POS]
-- Blank 25: [word] — part of speech: [POS]
-
-STEP 2: Write the passage (220-260 words) incorporating all 10 blanked words naturally.
-- Replace each planned word with its blank token: __ 16 __, __ 17 __, ..., __ 25 __
-- Every blank must fit naturally — the surrounding sentence must be grammatically correct and meaningful both with the answer and within the passage context.
-- The passage must read like a real magazine article on an interesting topic (science, culture, nature, psychology, history, technology).
-- Each sentence containing a blank must provide enough context to make the correct answer unambiguous, but not so obvious that the blank is trivial.
-
-STEP 3: Create the 10 candidate options (A)-(J).
-- Include all 10 answer words, each labeled (A) through (J) in random order.
-- Add deceptive distractors only if you have fewer than 10 answer words — each distractor must be clearly wrong for all 10 blanks due to grammar or meaning.
-- Mix single words and short 2-3 word phrases.
-- Include similar-looking pairs to challenge students (e.g. two verbs with different collocations, two nouns from similar semantic fields).
-
-STEP 4: Build the answers array.
-- "answers": exactly 10 letters [A-J], one per blank in order from blank 16 to blank 25.
-- Each letter A through J appears EXACTLY once.
-
-STEP 5: Write 10 Traditional Chinese explanations, one per blank (16-25).
-
-QUALITY STANDARDS:
-- Every sentence must be natural, factually accurate, and professionally written English.
-- No sentence should be awkward, implausible, or culturally inappropriate.
-- The correct answer for each blank must be the ONLY option that fits — test each of the other 9 options against the blank to confirm they do not fit grammatically or semantically.
-- FINAL COUNT CHECK: passage must contain exactly the tokens __ 16 __, __ 17 __, __ 18 __, __ 19 __, __ 20 __, __ 21 __, __ 22 __, __ 23 __, __ 24 __, __ 25 __ — all 10, no more, no less.
-
-Return JSON: { "blankMatchingSuite": { "passage": "...", "options": [...exactly 10 strings (A)-(J)...], "answers": [...exactly 10 letters A-J...], "explanations": [...exactly 10 Traditional Chinese strings...] } }`;
-
-    const schema = {
-      type: Type.OBJECT,
-      properties: {
-        blankMatchingSuite: {
-          type: Type.OBJECT,
-          properties: {
-            passage: { type: Type.STRING },
-            options: { type: Type.ARRAY, items: { type: Type.STRING } },
-            answers: { type: Type.ARRAY, items: { type: Type.STRING } },
-            explanations: { type: Type.ARRAY, items: { type: Type.STRING } }
-          },
-          required: ["passage", "options", "answers", "explanations"]
-        }
-      },
-      required: ["blankMatchingSuite"]
+    const report: ProgressReport = {
+      sessionId: `session-${Date.now()}`,
+      timestamp: Date.now(),
+      durationMs: Date.now() - session.startTime,
+      scoreSummary: summary,
+      details: reportDetails,
+      expertFeedback: "杜老師正在奮力評語中...",
+      selectedLevel
     };
 
-    const data = process.env.OPENAI_API_KEY ? await callOpenAI(system, user) : await callGemini(user, schema);
-    res.json({ success: true, data });
-  } catch (error: any) {
-    console.error("Matching error:", error);
-    res.status(500).json({ success: false, error: error.message });
-  }
-});
+    setActiveReport(report);
+    const updatedHistory = [report, ...studyHistory].slice(0, 50);
+    setStudyHistory(updatedHistory);
+    try { localStorage.setItem("gsat_buffet_history", JSON.stringify(updatedHistory)); } catch (e) { console.error(e); }
 
-// ── Reading ───────────────────────────────────────────────────
-app.post("/api/generate-reading", async (req, res) => {
-  try {
-    const { vocabList, selectedReadingLevels } = req.body;
-    verifyApiKeys();
+    setSession(prev => ({ ...prev, submitted: true }));
+    setActiveTab("report");
+  };
 
-    const levels = selectedReadingLevels?.length > 0 ? selectedReadingLevels : ["essential"];
-    const vocabString = vocabList?.length > 0
-      ? vocabList.map((vw: any) => `"${vw.word}"`).join(", ")
-      : "standard GSAT vocabulary";
+  const handleClearHistory = () => {
+    if (confirm("確定要清除所有備考研究紀錄嗎？")) {
+      setStudyHistory([]);
+      localStorage.removeItem("gsat_buffet_history");
+    }
+  };
 
-    // Pre-assign answer positions for each passage
-    const passageKeys = levels.map(() => makeAnswerKey(4, ["A","B","C","D"]));
-    const keyDescriptions = levels.map((lvl: string, i: number) =>
-      `${lvl} passage: Q1→${passageKeys[i][0]}, Q2→${passageKeys[i][1]}, Q3→${passageKeys[i][2]}, Q4→${passageKeys[i][3]}`
-    ).join("; ");
+  const uniqueUnits = Array.from(new Set<string>(availableWords.map(w => w.unit)))
+    .sort((a, b) => parseInt(a) - parseInt(b));
+  const filteredUnits = uniqueUnits.filter(u => u.toLowerCase().includes(unitSearch.toLowerCase()));
 
-    const system = `You are an expert GSAT English reading comprehension writer for Taiwan high school exams.`;
+  return (
+    <div className="min-h-screen flex flex-col font-sans bg-[#FBFBFA]">
+      {/* Header */}
+      <header className="no-print bg-white border-b border-stone-200/80 sticky top-0 z-50 shadow-xs">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-3.5 flex flex-col md:flex-row md:items-center justify-between gap-4">
+          <div className="flex items-center gap-3.5 cursor-pointer select-none" onClick={() => setActiveTab("lobby")}>
+            <div className="w-11 h-11 rounded-xl bg-gradient-to-br from-amber-700 to-amber-900 text-stone-100 flex items-center justify-center font-bold text-xl shadow-md border border-amber-950/20">TS</div>
+            <div>
+              <h1 className="text-md sm:text-lg font-black tracking-tight text-stone-900 flex flex-wrap items-center gap-x-2">
+                <span>GSAT English Mock Paper Creator</span>
+                <span className="text-amber-800 font-semibold text-sm sm:text-base">學測英文模考創建器</span>
+              </h1>
+              <p className="text-[11px] text-stone-500 mt-0.5">
+                <span className="text-amber-800">★</span> <span className="underline decoration-amber-600/40">Designed by Tr. Shirley Du</span>
+              </p>
+            </div>
+          </div>
+          <nav className="flex items-center gap-1 sm:gap-2 text-xs">
+            {examSuite && (
+              <>
+                <button onClick={() => setActiveTab("player")} className={`px-3 py-2 rounded-lg font-semibold transition flex items-center gap-1.5 ${activeTab === "player" ? "bg-teal-50 text-teal-900" : "text-stone-600 hover:bg-stone-50"}`}>
+                  <GraduationCap className="w-4 h-4 text-teal-700" /> Test Player
+                </button>
+                <button onClick={() => setActiveTab("worksheet")} className={`px-3 py-2 rounded-lg font-semibold transition flex items-center gap-1.5 ${activeTab === "worksheet" ? "bg-amber-50 text-amber-900" : "text-stone-600 hover:bg-stone-50"}`}>
+                  <Printer className="w-4 h-4 text-amber-800" /> Worksheet
+                </button>
+              </>
+            )}
+            {activeReport && (
+              <button onClick={() => setActiveTab("report")} className={`px-3 py-2 rounded-lg font-semibold transition flex items-center gap-1.5 ${activeTab === "report" ? "bg-stone-800 text-white" : "text-stone-600 hover:bg-stone-50"}`}>
+                <Award className="w-4 h-4 text-amber-400" /> Report
+              </button>
+            )}
+          </nav>
+        </div>
+      </header>
 
-    const user = `Generate reading comprehension passages for levels: ${levels.join(", ")} using vocabulary: ${vocabString}
+      <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8">
 
-Pre-assigned correct answer positions: ${keyDescriptions}
+        {/* ── LOBBY ── */}
+        {activeTab === "lobby" && (
+          <div className="space-y-8" id="lobby-panel">
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
 
-MANDATORY PROCESS for each passage:
+              {/* Config panel */}
+              <div className="lg:col-span-8 bg-white border border-stone-200 rounded-2xl p-6 md:p-8 shadow-xs space-y-6">
+                <div className="border-b border-stone-150 pb-4">
+                  <h3 className="text-lg font-bold text-stone-900 flex items-center gap-2">
+                    <Layers className="w-5 h-5 text-amber-800" /> Step 1: Choose Vocabulary Source
+                  </h3>
+                </div>
 
-STEP 1: Choose a specific, genuinely interesting topic appropriate for the level. Write 250-300 words that read like a real academic or magazine article — engaging, informative, coherent.
+                {/* Vocab source toggle */}
+                <div className="grid grid-cols-2 gap-3 p-1.5 bg-stone-100 rounded-xl">
+                  <button onClick={() => setVocabSource("system")} className={`py-2 rounded-lg text-xs font-bold transition ${vocabSource === "system" ? "bg-white text-stone-900 shadow-xs" : "text-stone-500 hover:text-stone-800"}`}>
+                    System Database 系統內建單字庫
+                  </button>
+                  <button onClick={() => setVocabSource("self-input")} className={`py-2 rounded-lg text-xs font-bold transition ${vocabSource === "self-input" ? "bg-white text-stone-900 shadow-xs" : "text-stone-500 hover:text-stone-800"}`}>
+                    Self-Input List 自訂單字輸入
+                  </button>
+                </div>
 
-STEP 2: Write 4 comprehension questions testing different skills:
-- Q1: Main idea or title selection
-- Q2: Specific detail (directly stated in the passage)
-- Q3: Vocabulary in context (meaning of a word/phrase as used in the passage)
-- Q4: Inference or author's purpose
+                {vocabSource === "system" ? (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 bg-stone-50/50 p-4 rounded-xl border border-stone-100">
+                    {/* Level */}
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-bold uppercase text-stone-500">Syllabus Level (字級)</label>
+                      <select value={selectedLevel} onChange={(e) => setSelectedLevel(parseInt(e.target.value))}
+                        className="w-full bg-white border border-stone-300 rounded-xl px-3 py-2 text-xs font-semibold focus:outline-none focus:ring-1 focus:ring-teal-700">
+                        {[1,2,3,4,5,6].map(l => (
+                          <option key={l} value={l}>Level {l} ({l <= 2 ? "Basic" : l <= 4 ? "Essential" : "Advanced"})</option>
+                        ))}
+                      </select>
+                    </div>
 
-STEP 3: For each question, write 4 options and place the correct one at the pre-assigned letter position.
-- Each correct answer must be directly and unambiguously supported by the passage text.
-- Each distractor must be clearly wrong — either contradicted by the passage, not mentioned, or a plausible-sounding misreading.
-- Options can be full sentences or short phrases as appropriate.
+                    {/* Units */}
+                    <div className="space-y-1.5 relative">
+                      <label className="text-xs font-bold uppercase text-stone-500">Filter Units (篩選單元)</label>
+                      <button type="button" onClick={() => setUnitsDropdownOpen(!unitsDropdownOpen)}
+                        className="w-full bg-white border border-stone-300 rounded-xl px-3 py-2 text-xs font-semibold flex items-center justify-between cursor-pointer">
+                        <span>{selectedUnits.length === 0 ? "All Units" : `${selectedUnits.length} Units selected`}</span>
+                        <span className="text-stone-400">▼</span>
+                      </button>
+                      {unitsDropdownOpen && (
+                        <div className="absolute top-10 right-0 left-0 bg-white border border-stone-200 rounded-xl shadow-md p-3 z-30 max-h-56 overflow-y-auto space-y-2">
+                          <input type="text" placeholder="Search unit..." value={unitSearch} onChange={(e) => setUnitSearch(e.target.value)}
+                            className="w-full border border-stone-200 rounded-md p-1.5 text-xs focus:outline-none" />
+                          <div className="flex justify-between text-[10px] text-teal-800 font-bold pb-1">
+                            <button type="button" onClick={() => setSelectedUnits(uniqueUnits)}>Select All</button>
+                            <button type="button" onClick={() => setSelectedUnits([])} className="text-rose-800">Clear</button>
+                          </div>
+                          {loadingCSV ? <p className="text-[10px] text-center py-2 animate-pulse">Loading...</p> :
+                            filteredUnits.map(unit => {
+                              const isChecked = selectedUnits.includes(unit);
+                              return (
+                                <label key={unit} className="flex items-center gap-2 p-1 hover:bg-stone-50 rounded cursor-pointer text-xs">
+                                  <input type="checkbox" checked={isChecked}
+                                    onChange={() => isChecked ? setSelectedUnits(selectedUnits.filter(u => u !== unit)) : setSelectedUnits([...selectedUnits, unit])}
+                                    className="rounded border-stone-300 text-teal-700 w-3.5 h-3.5" />
+                                  Unit {unit}
+                                </label>
+                              );
+                            })}
+                        </div>
+                      )}
+                    </div>
 
-NATURALNESS AND ACCURACY STANDARDS:
-- Passage content must be factually accurate.
-- Every sentence must be natural, professionally written English.
-- Questions must be clearly worded with no ambiguity.
-- Correct answers must be the ONLY defensible choice given the passage text.
-- Distractors must not be accidentally correct due to general knowledge outside the passage.
+                    {/* Word count info — no slider, just show count */}
+                    <div className="sm:col-span-2 border-t border-stone-100 pt-3 mt-1">
+                      <p className="text-xs text-stone-500 font-sans">
+                        <span className="font-bold text-amber-800">{availableWords.filter(w => selectedUnits.includes(w.unit)).length} words</span> available from selected units — all will be passed to the AI for question generation.
+                      </p>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="space-y-2 bg-stone-50/50 p-4 rounded-xl border border-stone-100">
+                    <label className="text-xs font-bold uppercase text-stone-500">Paste Word List</label>
+                    <textarea value={selfInputText} onChange={(e) => setSelfInputText(e.target.value)} rows={6}
+                      className="w-full bg-white border border-stone-300 rounded-xl p-3 text-xs font-mono focus:outline-none focus:ring-1 focus:ring-teal-700"
+                      placeholder="accommodate v.&#10;vital adj." />
+                    <p className="text-[10px] text-stone-500">Detected: {parseSelfInputList().length} words</p>
+                  </div>
+                )}
 
-FORMAT: level, title, passage (250-300 words), questions (exactly 4 per passage with id/question/options/correctAnswer/explanation in Traditional Chinese).
+                {/* Exercise types */}
+                <div className="border-t border-stone-150 pt-6 space-y-4">
+                  <h3 className="text-md font-bold text-stone-900 flex items-center gap-2">
+                    <Settings className="w-5 h-5 text-amber-800" /> Step 2: Choose Sections
+                  </h3>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    {[
+                      { key: "vocab", label: "Vocabulary MCQ (10 Qs) / 字彙單選題" },
+                    ].map(({ key, label }) => (
+                      <label key={key} className={`border rounded-xl p-4 flex items-center gap-3 cursor-pointer transition ${(selectedExerciseTypes as any)[key] ? "border-teal-400 bg-teal-50/20" : "border-stone-200 bg-white hover:border-stone-300"}`}>
+                        <input type="checkbox" checked={(selectedExerciseTypes as any)[key]}
+                          onChange={() => setSelectedExerciseTypes(prev => ({ ...prev, [key]: !(prev as any)[key] }))}
+                          className="rounded border-stone-300 text-teal-700 w-4 h-4 shrink-0" />
+                        <span className="text-xs font-bold text-stone-900">{label}</span>
+                      </label>
+                    ))}
 
-Return EXACTLY ${levels.length} passage(s).
+                    {/* Reading with levels */}
+                    <div className={`border rounded-xl p-4 space-y-3 transition ${selectedExerciseTypes.reading ? "border-teal-400 bg-teal-50/20" : "border-stone-200 bg-white hover:border-stone-300"}`}>
+                      <label className="flex items-center gap-3 cursor-pointer">
+                        <input type="checkbox" checked={selectedExerciseTypes.reading}
+                          onChange={() => setSelectedExerciseTypes(prev => ({ ...prev, reading: !prev.reading }))}
+                          className="rounded border-stone-300 text-teal-700 w-4 h-4 shrink-0" />
+                        <span className="text-xs font-bold text-stone-900">Reading Comprehension (4 Qs) / 閱讀測驗</span>
+                      </label>
+                      {selectedExerciseTypes.reading && (
+                        <div className="pl-7 grid grid-cols-3 gap-2">
+                          {["basic", "essential", "advanced"].map(lvl => (
+                            <button key={lvl} type="button"
+                              onClick={() => selectedReadingLevels.includes(lvl)
+                                ? setSelectedReadingLevels(selectedReadingLevels.filter(l => l !== lvl))
+                                : setSelectedReadingLevels([...selectedReadingLevels, lvl])}
+                              className={`py-1.5 px-2 rounded-lg text-[10px] border font-bold capitalize transition ${selectedReadingLevels.includes(lvl) ? "bg-teal-800 text-white border-teal-800" : "bg-white text-stone-600 border-stone-200 hover:bg-stone-50"}`}>
+                              {lvl === "basic" ? "Basic" : lvl === "essential" ? "Essential" : "Advanced"}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
 
-Return JSON: { "readingPassages": [...exactly ${levels.length} passage(s)...] }`;
+                {/* Generate button */}
+                <div className="border-t border-stone-150 pt-6">
+                  {generationError && (
+                    <div className="bg-rose-50 border border-rose-200 p-4 rounded-xl text-rose-800 flex items-start gap-3 mb-4 text-xs">
+                      <AlertCircle className="w-5 h-5 shrink-0" />
+                      <div><p className="font-bold">Error:</p><p>{generationError}</p></div>
+                    </div>
+                  )}
+                  {generationLoading ? (
+                    <div className="bg-stone-50 border border-stone-200 rounded-2xl p-6 text-center">
+                      <div className="flex justify-center items-center gap-2 mb-3">
+                        <RefreshCw className="w-6 h-6 text-teal-800 animate-spin" />
+                        <span className="font-bold text-stone-900">Generating all sections in parallel...</span>
+                      </div>
+                      <p className="text-xs font-mono text-amber-900 animate-pulse">{loadingStepMsg}</p>
+                    </div>
+                  ) : (
+                    <button onClick={handleGenerateExam}
+                      className="w-full bg-teal-800 hover:bg-teal-900 text-white rounded-2xl py-4 font-semibold text-sm flex items-center justify-center gap-2 shadow-md transition">
+                      <Sparkles className="w-4 h-4 text-amber-300" />
+                      一鍵完美生卷 (Generate Exam)
+                      <ArrowRight className="w-4 h-4" />
+                    </button>
+                  )}
+                </div>
+              </div>
 
-    const schema = {
-      type: Type.OBJECT,
-      properties: {
-        readingPassages: {
-          type: Type.ARRAY,
-          items: {
-            type: Type.OBJECT,
-            properties: {
-              level: { type: Type.STRING },
-              title: { type: Type.STRING },
-              passage: { type: Type.STRING },
-              questions: {
-                type: Type.ARRAY,
-                items: {
-                  type: Type.OBJECT,
-                  properties: {
-                    id: { type: Type.STRING },
-                    question: { type: Type.STRING },
-                    options: { type: Type.ARRAY, items: { type: Type.STRING } },
-                    correctAnswer: { type: Type.STRING },
-                    explanation: { type: Type.STRING }
-                  },
-                  required: ["id", "question", "options", "correctAnswer", "explanation"]
-                }
-              }
-            },
-            required: ["level", "title", "passage", "questions"]
-          }
-        }
-      },
-      required: ["readingPassages"]
-    };
+              {/* History panel */}
+              <div className="lg:col-span-4 no-print">
+                <div className="bg-white border border-stone-200 rounded-2xl p-5 shadow-xs space-y-4">
+                  <div className="flex justify-between items-center border-b border-stone-100 pb-3">
+                    <h3 className="text-xs font-bold uppercase tracking-wider text-stone-900 flex items-center gap-2">
+                      <History className="w-4 h-4 text-amber-800" /> Study History
+                    </h3>
+                    {studyHistory.length > 0 && (
+                      <button onClick={handleClearHistory} className="text-[10px] text-rose-800 hover:underline font-bold">Clear All</button>
+                    )}
+                  </div>
+                  {studyHistory.length === 0 ? (
+                    <div className="text-center py-8 text-stone-400 space-y-2">
+                      <Layers className="w-8 h-8 mx-auto stroke-1" />
+                      <p className="text-[11px]">尚未有練習紀錄。快開始備考吧！</p>
+                    </div>
+                  ) : (
+                    <div className="space-y-3 max-h-64 overflow-y-auto">
+                      {studyHistory.map(log => (
+                        <div key={log.sessionId} onClick={() => { setActiveReport(log); setActiveTab("report"); }}
+                          className="bg-stone-50 border p-3 rounded-xl hover:border-amber-300 cursor-pointer flex justify-between items-center transition">
+                          <div>
+                            <span className="text-[10px] text-stone-500 font-mono">{new Date(log.timestamp).toLocaleDateString()}</span>
+                            <p className="text-xs font-bold text-stone-900">Accuracy: {log.scoreSummary.comprehensive.score}%</p>
+                            <span className="text-[10px] text-stone-500">{log.scoreSummary.comprehensive.correct}/{log.scoreSummary.comprehensive.total} correct</span>
+                          </div>
+                          <span className={`w-8 h-8 rounded-full flex items-center justify-center font-mono text-[10px] font-bold shrink-0 ${log.scoreSummary.comprehensive.score >= 80 ? "bg-teal-100 text-teal-800" : log.scoreSummary.comprehensive.score >= 60 ? "bg-amber-100 text-amber-900" : "bg-rose-100 text-rose-900"}`}>
+                            {log.scoreSummary.comprehensive.score}%
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
 
-    const data = process.env.OPENAI_API_KEY ? await callOpenAI(system, user) : await callGemini(user, schema);
-    res.json({ success: true, data });
-  } catch (error: any) {
-    console.error("Reading error:", error);
-    res.status(500).json({ success: false, error: error.message });
-  }
-});
+        {/* ── PLAYER ── */}
+        {activeTab === "player" && examSuite && (
+          <div className="space-y-6" id="quiz-player-dashboard">
+            <div className="bg-white border border-stone-200 rounded-2xl p-4 md:p-6 flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+              <div>
+                <span className="bg-amber-100 font-mono text-[9px] px-2 py-0.5 rounded font-bold uppercase text-amber-900">Level {examSuite.metadata.selectedLevel}</span>
+                <h2 className="text-xl font-bold text-stone-900 mt-1">英語學測仿真複習卷</h2>
+                <p className="text-xs text-stone-500">{examSuite.metadata.vocabCount} reference words</p>
+              </div>
+              <div className="flex gap-2">
+                <button onClick={() => setActiveTab("worksheet")} className="px-4 py-2 bg-stone-100 hover:bg-stone-200 text-stone-700 rounded-xl text-xs font-semibold flex items-center gap-1.5 border transition">
+                  <Printer className="w-4 h-4" /> Print Worksheet
+                </button>
+                <button onClick={handleInteractiveSubmitAnswers} className="px-4 py-2 bg-teal-800 hover:bg-teal-900 text-white rounded-xl text-xs font-semibold flex items-center gap-1.5 shadow-sm transition">
+                  <CheckCircle className="w-4 h-4" /> Submit & Diagnose
+                </button>
+              </div>
+            </div>
 
-// ── Evaluate report ───────────────────────────────────────────
-app.post("/api/evaluate-report", async (req, res) => {
-  try {
-    const { scoreSummary, selectedLevel } = req.body;
-    verifyApiKeys();
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+              {/* Section nav */}
+              <div className="lg:col-span-3 flex flex-col gap-2 bg-white p-3 border border-stone-200 rounded-2xl shadow-xs">
+                <span className="text-[10px] font-bold font-mono uppercase text-stone-500 text-center py-1">Sections</span>
+                {examSuite.vocabQuestions && (
+                  <button onClick={() => setCurrentSection("vocab")} className={`px-3 py-2.5 rounded-xl text-xs font-bold flex items-center justify-between transition ${currentSection === "vocab" ? "bg-teal-700 text-white" : "text-stone-600 hover:bg-stone-50"}`}>
+                    <span>Part I: MCQ字彙題</span><span className="bg-black/10 text-[9px] px-2 py-0.5 rounded-full">10 Qs</span>
+                  </button>
+                )}
+                {examSuite.readingPassages?.length > 0 && (
+                  <button onClick={() => setCurrentSection("reading")} className={`px-3 py-2.5 rounded-xl text-xs font-bold flex items-center justify-between transition ${currentSection === "reading" ? "bg-teal-700 text-white" : "text-stone-600 hover:bg-stone-50"}`}>
+                    <span>Part II: Reading 閱讀</span><span className="bg-black/10 text-[9px] px-2 py-0.5 rounded-full">{(examSuite.readingPassages?.length || 0) * 4} Qs</span>
+                  </button>
+                )}
+                <div className="border-t border-stone-100 pt-3 mt-2 text-center">
+                  <p className="text-[10px] text-stone-400 font-sans leading-relaxed">完成所有題目後，<br />點擊右上角「Submit」提交。</p>
+                </div>
+              </div>
 
-    const system = `You are Tr. Shirley Du, a warm, encouraging GSAT English educator in Taiwan. Write in Traditional Chinese.`;
-    const user = `Write a personalized progress report as Tr. Shirley Du.
-Performance:
-- Overall: ${scoreSummary.comprehensive.correct}/${scoreSummary.comprehensive.total} (${scoreSummary.comprehensive.score}%)
-- Vocabulary MCQ: ${scoreSummary.vocab.correct}/${scoreSummary.vocab.total}
-- Reading Comprehension: ${scoreSummary.reading.correct}/${scoreSummary.reading.total}
-- Level: ${selectedLevel || "Mixed"}
+              {/* Viewport */}
+              <div className="lg:col-span-9 bg-white border border-stone-200 p-6 md:p-8 rounded-2xl shadow-xs">
 
-Return JSON: { "greeting": string, "analysis": string, "tips": [string, string, string], "encouragement": string }`;
+                {/* 1. VOCAB — uses vocab_${qIndex} as key */}
+                {currentSection === "vocab" && examSuite.vocabQuestions && (
+                  <div className="space-y-6">
+                    <div className="border-b border-stone-100 pb-3 flex justify-between items-center">
+                      <h3 className="text-base font-bold text-stone-900">Part I: Vocabulary MCQ (字彙單選題 1–10)</h3>
+                      <span className="text-[10px] font-mono text-stone-500">
+                        {Object.keys(session.answers.vocab).length}/10 answered
+                      </span>
+                    </div>
+                    <div className="space-y-8">
+                      {examSuite.vocabQuestions.map((q, qIndex) => {
+                        const answerKey = `vocab_${qIndex}`;
+                        const userSelectedChoice = session.answers.vocab[answerKey] || "";
+                        const questionText = q.question || q.prompt || q.sentence || q.stem || "";
+                        return (
+                          <div key={answerKey} className="space-y-3 p-4 hover:bg-stone-50/50 rounded-xl border border-transparent hover:border-stone-150">
+                            <span className="font-mono text-xs font-bold text-amber-800 bg-amber-50 rounded-lg px-2 py-0.5">Question {qIndex + 1}</span>
+                            {questionText ? (
+                              <p className="font-semibold text-stone-900 text-base leading-relaxed">{questionText}</p>
+                            ) : (
+                              <p className="text-xs text-rose-500 italic">⚠ Question text missing — please regenerate.</p>
+                            )}
+                            {q._warning && (
+                              <p className="text-xs text-amber-600 bg-amber-50 border border-amber-200 rounded px-2 py-1 mt-1">⚠ {q._warning}</p>
+                            )}
+                            <div className="grid grid-cols-1 md:grid-cols-4 gap-2.5 mt-4">
+                              {normalizeOptions(q.options).map((optString, optIdx) => {
+                                const letter = optString.charAt(1);
+                                const isSelected = userSelectedChoice === letter;
+                                return (
+                                  <button key={optIdx} type="button"
+                                    onClick={() => setSession(prev => ({ ...prev, answers: { ...prev.answers, vocab: { ...prev.answers.vocab, [answerKey]: letter } } }))}
+                                    className={`py-3 px-4 rounded-xl text-xs text-left font-semibold border transition ${isSelected ? "bg-teal-700 text-white border-teal-700" : "bg-white text-stone-700 border-stone-250 hover:bg-stone-50"}`}>
+                                    {optString}
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
 
-    const schema = {
-      type: Type.OBJECT,
-      properties: {
-        greeting: { type: Type.STRING },
-        analysis: { type: Type.STRING },
-        tips: { type: Type.ARRAY, items: { type: Type.STRING } },
-        encouragement: { type: Type.STRING }
-      },
-      required: ["greeting", "analysis", "tips", "encouragement"]
-    };
+                {/* 2. READING */}
+                {currentSection === "reading" && examSuite.readingPassages && (
+                  <div className="space-y-8">
+                    <div className="border-b border-stone-100 pb-3">
+                      <h3 className="text-base font-bold text-stone-900">Part IV: Reading Comprehension (閱讀測驗 26+)</h3>
+                      <p className="text-xs text-stone-500 mt-0.5">仔細閱讀文章後作答。</p>
+                    </div>
+                    {examSuite.readingPassages.map((p, pIdx) => (
+                      <div key={pIdx} className="space-y-6 border-b border-stone-200 pb-8 last:border-none">
+                        <div className="flex items-center gap-2">
+                          <span className="bg-amber-100 text-amber-900 font-mono text-[9px] px-2.5 py-0.5 rounded font-bold uppercase">Level: {p.level}</span>
+                          <h4 className="text-md font-bold font-serif text-stone-950">{p.title}</h4>
+                        </div>
+                        <p className="bg-[#FAF9F5]/70 border border-stone-150 p-6 rounded-2xl text-stone-850 text-base leading-relaxed font-serif whitespace-pre-wrap">{p.passage}</p>
+                        <div className="space-y-6 pt-4">
+                          {p.questions.map((q, qIdx) => {
+                            const userKey = `${pIdx}_${qIdx}`;
+                            const userAns = session.answers.reading[userKey] || "";
+                            const questionNumber = 26 + (pIdx * 4) + qIdx;
+                            const opts = normalizeOptions(q.options);
+                            return (
+                              <div key={userKey} className="bg-stone-50/50 p-4 rounded-xl border border-stone-150/50 space-y-3">
+                                <span className="font-mono text-[11px] font-bold text-stone-500 uppercase block">Question {questionNumber}</span>
+                                <p className="font-semibold text-stone-900 text-sm leading-relaxed">{q.question}</p>
+                                <div className="flex flex-col gap-2 mt-3 pl-1">
+                                  {opts.map((optStr, optIdx) => {
+                                    const letter = optStr.charAt(1);
+                                    const isSelected = userAns === letter;
+                                    return (
+                                      <button key={optIdx} type="button"
+                                        onClick={() => setSession(prev => ({ ...prev, answers: { ...prev.answers, reading: { ...prev.answers.reading, [userKey]: letter } } }))}
+                                        className={`py-2 px-4 rounded-lg text-xs text-left font-semibold border transition ${isSelected ? "bg-teal-700 text-white border-teal-700" : "bg-white text-stone-700 border-stone-300 hover:bg-stone-50"}`}>
+                                        {optStr}
+                                      </button>
+                                    );
+                                  })}
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
 
-    const data = process.env.OPENAI_API_KEY ? await callOpenAI(system, user) : await callGemini(user, schema);
-    res.json({ success: true, data });
-  } catch (error: any) {
-    console.error("Report error:", error);
-    res.status(500).json({ success: false, error: error.message });
-  }
-});
+                <div className="border-t border-stone-150 pt-6 mt-12 flex justify-between items-center text-xs">
+                  <span className="text-stone-400 italic">Have faith in your English intuition!</span>
+                  {currentSection === "vocab" && examSuite.readingPassages?.length > 0 ? (
+                    <button onClick={() => setCurrentSection("reading")} className="px-6 py-3 bg-stone-700 hover:bg-stone-800 text-white font-semibold rounded-2xl flex items-center gap-1.5 shadow-sm transition">
+                      Next: Reading →
+                    </button>
+                  ) : (
+                    <button onClick={handleInteractiveSubmitAnswers} className="px-6 py-3 bg-teal-800 hover:bg-teal-900 text-white font-semibold rounded-2xl flex items-center gap-1.5 shadow-sm transition">
+                      <CheckCircle className="w-4 h-4" /> Submit Final Assessment
+                    </button>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
 
-export default app;
+        {activeTab === "worksheet" && examSuite && (
+          <WorksheetExport suite={examSuite} onBack={() => setActiveTab("player")} />
+        )}
+
+        {activeTab === "report" && activeReport && examSuite && (
+          <ProgressReportView
+            report={activeReport}
+            suite={examSuite}
+            onRestart={() => { setExamSuite(null); setActiveTab("lobby"); }}
+            onGoToWorksheet={() => setActiveTab("worksheet")}
+            onReviewExam={() => setActiveTab("player")}
+          />
+        )}
+
+      </main>
+
+      {/* Confirmation modal */}
+      {showSubmitConfirm && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl p-6 md:p-8 max-w-md w-full shadow-xl space-y-4">
+            <h3 className="text-lg font-bold text-stone-900">確認交卷？</h3>
+            <p className="text-sm text-stone-600">交卷後將無法修改答案。請確認你已完成所有想作答的題目。</p>
+            <div className="bg-stone-50 rounded-xl p-4 text-xs text-stone-600 space-y-1">
+              <p>✅ 字彙題：{Object.keys(session.answers.vocab).length} / {examSuite?.vocabQuestions?.length || 0} answered</p>
+              <p>✅ 閱讀測驗：{Object.keys(session.answers.reading).length} / {(examSuite?.readingPassages?.reduce((a, p) => a + p.questions.length, 0)) || 0} answered</p>
+            </div>
+            <div className="flex gap-3 pt-2">
+              <button onClick={() => setShowSubmitConfirm(false)}
+                className="flex-1 py-2.5 border border-stone-300 rounded-xl text-sm font-semibold text-stone-700 hover:bg-stone-50 transition">
+                繼續作答
+              </button>
+              <button onClick={handleConfirmedSubmit}
+                className="flex-1 py-2.5 bg-teal-800 hover:bg-teal-900 text-white rounded-xl text-sm font-semibold transition">
+                確認交卷
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <footer className="no-print bg-white border-t border-stone-200 mt-16 py-6 text-center text-[11px] text-stone-500">
+        <p className="font-semibold text-stone-700">GSAT English Mock Paper Creator • 學測英文模考創建器</p>
+        <p className="mt-1 text-[10px] text-amber-800">Designed by Tr. Shirley Du</p>
+        <p className="mt-2 text-[9px] text-stone-400">© 2026. All rights reserved.</p>
+      </footer>
+    </div>
+  );
+}
