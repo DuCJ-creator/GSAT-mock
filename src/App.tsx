@@ -171,12 +171,8 @@ export default function App() {
       const promises: Promise<any>[] = [];
       const sectionKeys: string[] = [];
 
-     if (selectedExerciseTypes.vocab) {
-  promises.push(
-    fetchSection("/api/generate-vocab", {
-      vocabList: finalVocabList
-    })
-  );
+if (selectedExerciseTypes.vocab) {
+  promises.push(fetchSection("/api/generate-vocab", { vocabList: finalVocabList }));
   sectionKeys.push("vocab");
 }
 
