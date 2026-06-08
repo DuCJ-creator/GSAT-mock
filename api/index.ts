@@ -72,8 +72,8 @@ async function validateUniquenessBatch(
     };
   });
 
- const result = await callOpenAI(
-  `You are a strict GSAT English vocabulary item reviewer. 
+  const result = await callOpenAI(
+    `You are a strict GSAT English vocabulary item reviewer.
 Your job is to detect whether any question has more than one defensible answer.`,
     `
 Review the following vocabulary multiple-choice questions.
@@ -203,6 +203,27 @@ function normalizePos(pos: any): string {
   return p || "unspecified";
 }
 
+function cleanVocabularyList(vocabList: any[]) {
+  const clean = (Array.isArray(vocabList) ? vocabList : [])
+    .map((vw: any) => ({
+      word: String(vw.word || "").trim(),
+      pos: normalizePos(vw.pos),
+      rawPos: String(vw.pos || "").trim(),
+      meaning: String(vw.meaning || "").trim(),
+      level: vw.level,
+      unit: vw.unit
+    }))
+    .filter((vw: any) => vw.word.length > 0);
+
+  const seen = new Set<string>();
+  return clean.filter((vw: any) => {
+    const key = vw.word.toLowerCase();
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
 function escapeRegExp(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
@@ -226,38 +247,95 @@ function answerLeaksIntoQuestion(question: string, word: string): boolean {
 }
 
 function pickTargetWords(vocabList: any[], count: number = 10) {
-  const clean = (Array.isArray(vocabList) ? vocabList : [])
-    .map((vw: any) => ({
-      word: String(vw.word || "").trim(),
-      pos: normalizePos(vw.pos),
-      rawPos: String(vw.pos || "").trim(),
-      meaning: String(vw.meaning || "").trim(),
-      level: vw.level,
-      unit: vw.unit
-    }))
-    .filter((vw: any) => vw.word.length > 0);
-
-  const seen = new Set<string>();
-  const unique = clean.filter((vw: any) => {
-    const key = vw.word.toLowerCase();
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
-
-  return shuffle(unique).slice(0, count);
+  return shuffle(cleanVocabularyList(vocabList)).slice(0, count);
 }
 
-function buildTargetWordList(targetWords: any[], answerKey: string[]): string {
+function buildTargetWordList(targetWords: any[]): string {
   return targetWords.map((vw: any, i: number) => {
     return `Q${i + 1}
 - Target word: ${vw.word}
 - POS from CSV: ${vw.rawPos || vw.pos || "unspecified"} (${vw.pos || "unspecified"})
-- Chinese meaning from CSV: ${vw.meaning || "未提供"}
-- Correct answer position: ${answerKey[i]}`;
+- Chinese meaning from CSV: ${vw.meaning || "未提供"}`;
   }).join("\n\n");
 }
-function validateVocabQuestion(q: any, expected: any, expectedAnswer: string, index: number): string[] {
+
+function buildOptionsFromVocabPool(
+  targetWord: any,
+  vocabPool: any[],
+  correctAnswer: string
+): string[] {
+  const letters = ["A", "B", "C", "D"];
+  const correctIndex = letters.indexOf(correctAnswer);
+  if (correctIndex < 0) throw new Error(`Invalid correct answer letter: ${correctAnswer}`);
+
+  const target = String(targetWord.word || "").trim();
+  const targetKey = target.toLowerCase();
+
+  const samePos = vocabPool.filter((v: any) =>
+    v.word.toLowerCase() !== targetKey &&
+    v.pos === targetWord.pos
+  );
+
+  const fallback = vocabPool.filter((v: any) =>
+    v.word.toLowerCase() !== targetKey &&
+    v.pos !== targetWord.pos
+  );
+
+  const distractors = [
+    ...shuffle(samePos),
+    ...shuffle(fallback)
+  ].slice(0, 3);
+
+  if (distractors.length < 3) {
+    throw new Error("At least 4 unique vocabulary words are required to generate 4 MCQ options from the uploaded list.");
+  }
+
+  const optionWords = distractors.map((v: any) => v.word);
+  optionWords.splice(correctIndex, 0, target);
+
+  return optionWords.map((word, idx) => `(${letters[idx]}) ${word}`);
+}
+
+function buildProgrammaticExplanation(q: any, targetWord: any, options: string[]): string {
+  const correctWord = String(targetWord.word || "").trim();
+  const meaning = String(targetWord.meaning || "").trim() || "題目指定的中文意思";
+  const distractors = options
+    .map(optionWord)
+    .filter((word) => word.toLowerCase() !== correctWord.toLowerCase());
+
+  return `正解為 ${correctWord}，意思是「${meaning}」。本句的空格需要符合「${meaning}」這個語意，且與句中的上下文、搭配與邏輯關係最自然。${distrorsText(distractors)}雖然都是指定字彙表中的選項，但不符合本句所需的語意或自然搭配，因此不是最佳答案。`;
+}
+
+function distrorsText(distractors: string[]): string {
+  if (distractors.length === 0) return "其他選項";
+  return `其他選項 ${distractors.join("、")}`;
+}
+
+function assembleVocabQuestions(
+  data: any,
+  targetWords: any[],
+  vocabPool: any[],
+  answerKey: string[]
+) {
+  const generated = Array.isArray(data?.vocabQuestions) ? data.vocabQuestions : [];
+
+  return {
+    vocabQuestions: targetWords.map((targetWord: any, idx: number) => {
+      const raw = generated[idx] || {};
+      const options = buildOptionsFromVocabPool(targetWord, vocabPool, answerKey[idx]);
+      return {
+        id: `v${idx + 1}`,
+        question: String(raw.question || "").trim(),
+        options,
+        correctAnswer: answerKey[idx],
+        wordTested: targetWord.word,
+        explanation: buildProgrammaticExplanation(raw, targetWord, options)
+      };
+    })
+  };
+}
+
+function validateVocabQuestion(q: any, expected: any, expectedAnswer: string, index: number, vocabSet: Set<string>): string[] {
   const issues: string[] = [];
   const id = `Q${index + 1}`;
 
@@ -296,6 +374,12 @@ function validateVocabQuestion(q: any, expected: any, expectedAnswer: string, in
     const bareWords = options.map(optionWord).map(w => w.toLowerCase());
     if (new Set(bareWords).size !== 4) issues.push(`${id}: options must be four distinct words or phrases.`);
     if (bareWords.some(w => !w)) issues.push(`${id}: all options must be non-empty.`);
+
+    for (const word of bareWords) {
+      if (!vocabSet.has(word)) {
+        issues.push(`${id}: option "${word}" is not from the uploaded vocabulary list.`);
+      }
+    }
   }
 
   if (!String(q.explanation || "").trim()) issues.push(`${id}: explanation is missing.`);
@@ -306,10 +390,12 @@ function validateVocabQuestion(q: any, expected: any, expectedAnswer: string, in
 async function validateVocabSuite(
   data: any,
   targetWords: any[],
-  answerKey: string[]
+  answerKey: string[],
+  vocabPool: any[]
 ): Promise<string[]> {
   const questions = data?.vocabQuestions;
   const issues: string[] = [];
+  const vocabSet = new Set(vocabPool.map((v: any) => String(v.word || "").toLowerCase()));
 
   if (!Array.isArray(questions)) {
     return [`vocabQuestions must be an array.`];
@@ -329,7 +415,8 @@ async function validateVocabSuite(
         checkedQuestions[i],
         targetWords[i],
         answerKey[i],
-        i
+        i,
+        vocabSet
       )
     );
   }
@@ -338,11 +425,11 @@ async function validateVocabSuite(
 
   if (Array.isArray(uniqueness?.results)) {
     for (const result of uniqueness.results) {
-     if (!result.passed) {
-  console.warn(
-    `Q${result.index}: Multiple defensible answers detected. ${result.reason || ""}`
-  );
-}
+      if (!result.passed) {
+        console.warn(
+          `Q${result.index}: Multiple defensible answers detected. ${result.reason || ""}`
+        );
+      }
     }
   } else {
     issues.push("Uniqueness validation failed: invalid reviewer response.");
@@ -351,8 +438,8 @@ async function validateVocabSuite(
   return issues;
 }
 
-function buildVocabPrompt(targetWords: any[], answerKey: string[], previousIssues: string[] = []) {
-  const targetList = buildTargetWordList(targetWords, answerKey);
+function buildVocabPrompt(targetWords: any[], previousIssues: string[] = []) {
+  const targetList = buildTargetWordList(targetWords);
 
   const correctionBlock = previousIssues.length > 0
     ? `
@@ -362,13 +449,22 @@ ${previousIssues.map((x, i) => `${i + 1}. ${x}`).join("\n")}
 `
     : "";
 
-  const system = `You are a senior GSAT English test writer with 20+ years of experience creating official Taiwanese GSAT-style vocabulary questions. You are strict about part of speech, semantic field, collocation, and natural English.`;
+  const system = `You are a senior GSAT English test writer with 20+ years of experience creating official Taiwanese GSAT-style vocabulary question stems. You are strict about part of speech, meaning, collocation, contextual clues, and natural English.`;
 
   const user = `${correctionBlock}
 
-Generate EXACTLY ${targetWords.length} high-quality GSAT-style vocabulary multiple-choice questions.
+Generate EXACTLY ${targetWords.length} high-quality GSAT-style vocabulary question STEMS only.
 
-You MUST use the target words below exactly.
+IMPORTANT SYSTEM DESIGN:
+You are responsible ONLY for writing the sentence stem.
+The server will create all answer options and answer positions programmatically from the uploaded CSV vocabulary list.
+
+DO NOT generate answer options.
+DO NOT generate distractors.
+DO NOT decide the correct answer letter.
+DO NOT include A/B/C/D anywhere.
+
+You MUST use the target words below exactly as the hidden correct answers.
 Each question must test the assigned word from the CSV.
 Do not skip any target word.
 Do not repeat any target word.
@@ -380,9 +476,9 @@ ${targetList}
 CORE PRINCIPLE:
 The CSV provides the target word, its part of speech, and its Chinese meaning.
 You MUST use all three:
-1. Use the target word as the correct answer.
-2. Use the CSV POS to control grammar and all options.
-3. Use the Chinese meaning to infer the semantic field and create professional distractors.
+1. Use the target word as the hidden correct answer.
+2. Use the CSV POS to control the grammar of the blank.
+3. Use the Chinese meaning to create a clear, natural context.
 
 MANDATORY PROCESS FOR EACH QUESTION:
 
@@ -391,7 +487,8 @@ For each assigned word:
 - Read its English word.
 - Read its POS from CSV.
 - Read its Chinese meaning from CSV.
-- Infer a semantic category from the meaning.
+- Infer the correct usage and collocation.
+
 Examples:
 testimony / n. / 證詞 → legal communication
 durability / n. / 耐久性 → product quality
@@ -403,20 +500,16 @@ STEP 2 — Write a natural GSAT-level sentence.
 The sentence must contain exactly one blank: ______
 
 Requirements:
-
 - The blank must require the CSV POS grammatically.
 - The context must fit the Chinese meaning.
 - The sentence must sound like authentic academic or formal English.
 - The sentence must be realistic, natural, and factually reasonable.
 - Avoid artificial phrases, childish examples, and strange situations.
+- The target word must be the most natural completion.
 
 CONTEXTUAL CLUE REQUIREMENT:
-
-The sentence MUST contain sufficient contextual clues so that
-ONLY ONE option can logically and naturally fit.
-
-The contextual clues should come from:
-
+The sentence MUST contain strong contextual clues.
+The clues should come from:
 - collocation
 - real-world knowledge
 - cause-and-effect relationships
@@ -424,145 +517,32 @@ The contextual clues should come from:
 - specific situational details
 - academic or professional contexts
 
-Do NOT create sentences where two or more options are reasonably acceptable.
-
 Bad example:
-
 The museum staff carefully ______ the floor.
-
-Reason:
-Multiple answers may fit (wax, polish, scrub, mop).
+Reason: context is too weak.
 
 Good example:
-
 The museum staff carefully ______ the hardwood floor with a protective coating to preserve its shine and prevent moisture damage.
-
-Reason:
-The clue "protective coating" uniquely points to wax.
-
-Before finalizing the sentence, verify that an expert English teacher would expect only one answer.
-
-STEP 3 — Create high-quality distractors.
-The 3 distractors must:
-- Have the SAME POS as the CSV POS.
-- Be similar in difficulty.
-- Belong to the SAME or closely related semantic field inferred from the Chinese meaning.
-- Be plausible enough that students must read the sentence carefully.
-- Be wrong because of meaning, collocation, usage, or context.
-
-FORBIDDEN DISTRACTORS:
-- Random unrelated words.
-- Random scientific terms, weather words, food names, animals, or objects.
-- Words from totally different semantic fields.
-- Extremely rare or obscure words.
-- Mixed part-of-speech options.
-- Options that make the question absurdly easy.
-
-BAD:
-Target: testimony / n. / 證詞
-Options: testimony / rainfall / hydrogen / smog
-Reason: all are nouns, but they are semantically unrelated and unprofessional.
-
-GOOD:
-Target: testimony / n. / 證詞
-Options: testimony / allegation / confession / statement
-Reason: all are legal or communication-related nouns.
-
-BAD:
-Target: visual / adj. / 視覺的
-Sentence: With visual aids, the professor...
-Reason: the answer word appears in the question.
-
-GOOD:
-Target: visual / adj. / 視覺的
-Sentence: The lecturer used ______ aids to help students understand the complex structure of the human eye.
-Options: visual / verbal / auditory / textual
-Reason: all are adjective options related to modes of communication or perception.
+Reason: the clue "protective coating" makes the intended meaning clear.
 
 ANTI-LEAK RULE:
 The target word MUST NOT appear anywhere in the question sentence.
 Do not include direct morphological variants either.
 If the target word appears in the sentence, the item fails.
 
-STEP 3.5 — Uniqueness Verification
-
-For each question:
-
-1. Hide the correct answer.
-2. Test each distractor individually in the sentence.
-3. Ask:
-
-"Could this option reasonably fit the sentence?"
-
-4. If YES for any distractor,
-   rewrite the sentence with stronger contextual clues.
-
-5. Continue until only one answer remains plausible.
-
-The final item must have:
-
-- one grammatically correct answer
-- one semantically correct answer
-- three distractors that are plausible at first glance
-  but clearly incorrect once the contextual clues are considered
-  
-ANSWER POSITION RULE:
-The correct answer must be placed at the exact pre-assigned answer position for that question.
-The correct option text must exactly match the assigned target word.
-
-GSAT AUTHENTICITY RULE
-
-Taiwan GSAT vocabulary questions are not solved by grammar alone.
-
-Students must rely on contextual clues to distinguish between
-semantically related words.
-
-Therefore:
-
-- Options should be semantically related.
-- Contextual clues must be strong.
-- The answer should become unique because of the context,
-  not because the other options are grammatically impossible.
-
-Aim for:
-
-Difficult options
-+
-Clear contextual clues
-=
-One unique answer
-
 QUALITY CHECK BEFORE RETURNING:
 For every question, verify:
 1. It tests the exact assigned CSV word.
-2. The answer is placed at the assigned letter.
-3. The sentence contains exactly one blank.
-4. The target word does not appear in the sentence.
-5. All options have the same POS as the CSV POS.
-6. Distractors are semantically related to the Chinese meaning.
-7. The sentence is natural and GSAT-appropriate.
-8. Only one answer is defensible.
-
-A distractor is considered invalid if it can reasonably fit the sentence
-without contradicting the context.
-
-The sentence must provide enough evidence to eliminate every distractor.
-
-If two options could both be defended by a competent English teacher,
-the item must be rewritten.
-
-9. The explanation teaches the semantic and grammatical reason.
+2. The sentence contains exactly one blank.
+3. The target word does not appear in the sentence.
+4. The blank grammatically requires the CSV POS.
+5. The sentence is natural and GSAT-appropriate.
+6. The sentence provides clear semantic and collocational clues.
 
 FORMAT:
 - id: "v1" through "v${targetWords.length}"
 - question: one complete sentence with exactly "______"
-- options: ["(A) word", "(B) word", "(C) word", "(D) word"]
-- correctAnswer: bare letter only: "A", "B", "C", or "D"
 - wordTested: exact CSV target word
-- explanation: Traditional Chinese. Explain:
-  1. why the correct answer fits the sentence,
-  2. how it relates to the CSV Chinese meaning,
-  3. why each distractor is not the best answer.
 
 Return ONLY this JSON shape:
 {
@@ -570,10 +550,7 @@ Return ONLY this JSON shape:
     {
       "id": "v1",
       "question": "... ______ ...",
-      "options": ["(A) ...", "(B) ...", "(C) ...", "(D) ..."],
-      "correctAnswer": "A",
-      "wordTested": "...",
-      "explanation": "..."
+      "wordTested": "..."
     }
   ]
 }`;
@@ -584,20 +561,25 @@ Return ONLY this JSON shape:
 // ── Health ────────────────────────────────────────────────────
 app.get("/api/health", (_req, res) => res.json({ status: "ok" }));
 
-// ── Vocab: strict CSV word/POS/meaning-based GSAT generator ────
+// ── Vocab: GPT writes stems; server controls options 100% ────
 app.post("/api/generate-vocab", async (req, res) => {
   try {
     const { vocabList } = req.body;
     verifyApiKeys();
 
-    const targetWords = pickTargetWords(vocabList || [], 10);
+    const vocabPool = cleanVocabularyList(vocabList || []);
+    if (vocabPool.length < 4) {
+      throw new Error("At least 4 unique vocabulary words are required to generate Vocabulary MCQ options.");
+    }
+
+    const targetWords = pickTargetWords(vocabPool, 10);
     if (targetWords.length === 0) {
       throw new Error("No usable vocabulary words were provided.");
     }
 
     const answerKey = makeAnswerKey(targetWords.length, ["A", "B", "C", "D"]);
 
-    const schema = {
+    const stemOnlySchema = {
       type: Type.OBJECT,
       properties: {
         vocabQuestions: {
@@ -607,12 +589,9 @@ app.post("/api/generate-vocab", async (req, res) => {
             properties: {
               id: { type: Type.STRING },
               question: { type: Type.STRING },
-              options: { type: Type.ARRAY, items: { type: Type.STRING } },
-              correctAnswer: { type: Type.STRING },
-              wordTested: { type: Type.STRING },
-              explanation: { type: Type.STRING }
+              wordTested: { type: Type.STRING }
             },
-            required: ["id", "question", "options", "correctAnswer", "wordTested", "explanation"]
+            required: ["id", "question", "wordTested"]
           }
         }
       },
@@ -620,47 +599,37 @@ app.post("/api/generate-vocab", async (req, res) => {
     };
 
     let lastIssues: string[] = [];
+    let rawData: any = null;
     let data: any = null;
 
     for (let attempt = 1; attempt <= 3; attempt++) {
-      const { system, user } = buildVocabPrompt(targetWords, answerKey, lastIssues);
-      data = process.env.OPENAI_API_KEY
+      const { system, user } = buildVocabPrompt(targetWords, lastIssues);
+      rawData = process.env.OPENAI_API_KEY
         ? await callOpenAIHighQuality(system, user)
-        : await callGemini(user, schema);
+        : await callGemini(user, stemOnlySchema);
 
-      if (data?.vocabQuestions?.length > targetWords.length) {
-        data.vocabQuestions = data.vocabQuestions.slice(0, targetWords.length);
+      if (rawData?.vocabQuestions?.length > targetWords.length) {
+        rawData.vocabQuestions = rawData.vocabQuestions.slice(0, targetWords.length);
       }
 
-     lastIssues = await validateVocabSuite(
-  data,
-  targetWords,
-  answerKey
-);
+      data = assembleVocabQuestions(rawData, targetWords, vocabPool, answerKey);
+      lastIssues = await validateVocabSuite(data, targetWords, answerKey, vocabPool);
       if (lastIssues.length === 0) break;
     }
 
-  if (lastIssues.length > 0) {
-  console.warn("Vocab validation warnings:", lastIssues);
-}
-data.vocabQuestions = data.vocabQuestions.map((q: any, idx: number) => ({
-  ...q,
-  id: `v${idx + 1}`,
-  options: normalizeOptions(q.options),
-  correctAnswer: normalizeAnswer(q.correctAnswer),
-  wordTested: targetWords[idx].word
-}));
+    if (lastIssues.length > 0) {
+      console.warn("Vocab validation warnings:", lastIssues);
+    }
 
-if (data.vocabQuestions?.length > 0) {
-  data.vocabQuestions[0]._warning =
-    "AI 出題提醒：部分題目可能有兩個以上合理答案，正式使用前請人工檢查。 / AI-generated questions may contain multiple defensible answers. Please review before formal use.";
-}
+    if (data?.vocabQuestions?.length > 0) {
+      data.vocabQuestions[0]._warning =
+        "AI 出題提醒：題幹由 AI 產生；選項與答案位置已由系統從指定字彙表自動產生。正式使用前仍建議人工檢查。 / AI-generated stems; options and answer positions are generated programmatically from the provided vocabulary list.";
+    }
 
-res.json({
-  success: true,
-  data
-});
-    
+    res.json({
+      success: true,
+      data
+    });
   } catch (error: any) {
     console.error("Vocab error:", error);
     res.status(500).json({ success: false, error: error.message });
