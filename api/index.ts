@@ -72,7 +72,7 @@ async function validateUniquenessBatch(
     };
   });
 
- const result = await callOpenAIHighQuality(
+ const result = await callOpenAI(
   `You are a strict GSAT English vocabulary item reviewer. 
 Your job is to detect whether any question has more than one defensible answer.`,
     `
@@ -652,7 +652,14 @@ app.post("/api/generate-vocab", async (req, res) => {
       wordTested: targetWords[idx].word
     }));
 
-    res.json({ success: true, data });
+res.json({
+  success: true,
+  aiWarning: {
+    zh: "⚠️ AI 出題提醒：部分題目可能有兩個以上合理答案，正式使用前請人工檢查。",
+    en: "⚠️ AI-generated questions may contain multiple defensible answers. Please review before formal use."
+  },
+  data
+});
   } catch (error: any) {
     console.error("Vocab error:", error);
     res.status(500).json({ success: false, error: error.message });
