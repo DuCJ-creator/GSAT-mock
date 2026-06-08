@@ -643,23 +643,24 @@ app.post("/api/generate-vocab", async (req, res) => {
   if (lastIssues.length > 0) {
   console.warn("Vocab validation warnings:", lastIssues);
 }
+data.vocabQuestions = data.vocabQuestions.map((q: any, idx: number) => ({
+  ...q,
+  id: `v${idx + 1}`,
+  options: normalizeOptions(q.options),
+  correctAnswer: normalizeAnswer(q.correctAnswer),
+  wordTested: targetWords[idx].word
+}));
 
-    data.vocabQuestions = data.vocabQuestions.map((q: any, idx: number) => ({
-      ...q,
-      id: `v${idx + 1}`,
-      options: normalizeOptions(q.options),
-      correctAnswer: normalizeAnswer(q.correctAnswer),
-      wordTested: targetWords[idx].word
-    }));
+if (data.vocabQuestions?.length > 0) {
+  data.vocabQuestions[0]._warning =
+    "AI 出題提醒：部分題目可能有兩個以上合理答案，正式使用前請人工檢查。 / AI-generated questions may contain multiple defensible answers. Please review before formal use.";
+}
 
 res.json({
   success: true,
-  aiWarning: {
-    zh: "⚠️ AI 出題提醒：部分題目可能有兩個以上合理答案，正式使用前請人工檢查。",
-    en: "⚠️ AI-generated questions may contain multiple defensible answers. Please review before formal use."
-  },
   data
 });
+    
   } catch (error: any) {
     console.error("Vocab error:", error);
     res.status(500).json({ success: false, error: error.message });
