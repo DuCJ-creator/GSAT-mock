@@ -23,16 +23,17 @@ export default function WorksheetExport({ suite, onBack }: WorksheetExportProps)
     md += `Class: ______________  Name: ______________  Date: ______________  Score: ______________\n`;
     md += `========================================================================\n\n`;
 
-    if (suite.vocabQuestions && suite.vocabQuestions.length > 0) {
-      md += `### Part I: Multiple-Choice Questions (10 GSAT-Level Questions)\n`;
-      md += `*Directions: Choose the best word to fill in each blank.*\n\n`;
-      suite.vocabQuestions.forEach((q, idx) => {
-        const questionText = q.question || q.prompt || q.sentence || q.stem || "";
-        md += `${idx + 1}. ${questionText}\n`;
-        md += `   ${normalizeOptions(q.options).join("   ")}\n\n`;
-      });
-      md += `\n`;
+if (suite.vocabQuestions && suite.vocabQuestions.length > 0) {
+  md += `#### Part I Solution:\n`;
+
+  suite.vocabQuestions.forEach((q, idx) => {
+    md += `Q${idx + 1}: (${q.correctAnswer})\n`;
+
+    if (includeExplanations) {
+      md += `解析: ${q.explanation}\n\n`;
     }
+  });
+}
 
     if (suite.readingPassages && suite.readingPassages.length > 0) {
       md += `### Part II: Reading Comprehension\n`;
@@ -81,12 +82,20 @@ md += `  Q${qNumber}: (${q.correctAnswer})\n`;
   };
 
 
-  const handleCopy = () => {
+const handleCopy = async () => {
+  try {
     const text = generateMarkdown();
-    navigator.clipboard.writeText(text);
+
+    await navigator.clipboard.writeText(text);
+
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
-  };
+  } catch (err) {
+    console.error("Copy failed", err);
+
+    alert("無法複製到剪貼簿");
+  }
+};
 
   const handlePrint = () => window.print();
 
