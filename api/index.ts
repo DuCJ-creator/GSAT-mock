@@ -413,7 +413,8 @@ function buildOptionsFromVocabPool(
   targetWord: any,
   vocabPool: any[],
   correctAnswer: string,
-  usedOptionWords: Set<string>
+  usedOptionWords: Set<string>,
+  targetWordKeys: Set<string>
 ): string[] {
   const letters = ["A", "B", "C", "D"];
   const correctIndex = letters.indexOf(correctAnswer);
@@ -422,19 +423,29 @@ function buildOptionsFromVocabPool(
   const target = String(targetWord.word || "").trim();
   const targetKey = target.toLowerCase();
 
+  // A target word may appear only once: as its own correct answer.
+  // Therefore, all 10 target words are pre-reserved and can never be used as distractors.
   if (usedOptionWords.has(targetKey)) {
-    throw new Error(`Target word "${target}" was already used as an option in this 10-question set.`);
+    throw new Error("OPTION_POOL_CONFLICT");
   }
 
-  const samePos = vocabPool.filter((v: any) => {
-    const key = v.word.toLowerCase();
-    return key !== targetKey && !usedOptionWords.has(key) && v.pos === targetWord.pos;
-  });
+  const isAvailableDistractor = (v: any) => {
+    const key = String(v.word || "").toLowerCase();
+    return (
+      key &&
+      key !== targetKey &&
+      !targetWordKeys.has(key) &&
+      !usedOptionWords.has(key)
+    );
+  };
 
-  const fallback = vocabPool.filter((v: any) => {
-    const key = v.word.toLowerCase();
-    return key !== targetKey && !usedOptionWords.has(key) && v.pos !== targetWord.pos;
-  });
+  const samePos = vocabPool.filter((v: any) =>
+    isAvailableDistractor(v) && v.pos === targetWord.pos
+  );
+
+  const fallback = vocabPool.filter((v: any) =>
+    isAvailableDistractor(v) && v.pos !== targetWord.pos
+  );
 
   const distractors = [
     ...shuffle(samePos),
@@ -442,7 +453,7 @@ function buildOptionsFromVocabPool(
   ].slice(0, OPTIONS_PER_QUESTION - 1);
 
   if (distractors.length < OPTIONS_PER_QUESTION - 1) {
-    throw new Error(`Not enough unused vocabulary words to create non-repeating options. Need ${UNIQUE_OPTION_WORDS_REQUIRED} unique words for ${VOCAB_QUESTION_COUNT} questions.`);
+    throw new Error("INSUFFICIENT_UNIQUE_OPTION_POOL");
   }
 
   const optionWords = distractors.map((v: any) => v.word);
@@ -478,6 +489,13 @@ function assembleVocabQuestions(
 ) {
   const generated = Array.isArray(data?.vocabQuestions) ? data.vocabQuestions : [];
   const usedOptionWords = new Set<string>();
+  const targetWordKeys = new Set(
+    targetWords.map((v: any) => String(v.word || "").toLowerCase())
+  );
+
+  if (targetWordKeys.size < targetWords.length) {
+    throw new Error("DUPLICATE_TARGET_WORDS");
+  }
 
   if (vocabPool.length < UNIQUE_OPTION_WORDS_REQUIRED) {
     throw new Error(`Need at least ${UNIQUE_OPTION_WORDS_REQUIRED} unique vocabulary words to generate ${VOCAB_QUESTION_COUNT} questions with no repeated options. Only ${vocabPool.length} unique words are available after supplementing from the word bank.`);
@@ -486,7 +504,13 @@ function assembleVocabQuestions(
   return {
     vocabQuestions: targetWords.map((targetWord: any, idx: number) => {
       const raw = generated[idx] || {};
-      const options = buildOptionsFromVocabPool(targetWord, vocabPool, answerKey[idx], usedOptionWords);
+      const options = buildOptionsFromVocabPool(
+        targetWord,
+        vocabPool,
+        answerKey[idx],
+        usedOptionWords,
+        targetWordKeys
+      );
       return {
         id: `v${idx + 1}`,
         question: String(raw.question || "").trim(),
@@ -726,6 +750,26 @@ Return ONLY this JSON shape:
   return { system, user };
 }
 
+function toUserFriendlyVocabError(error: any): string {
+  const message = String(error?.message || "");
+
+  if (
+    message.includes("INSUFFICIENT_UNIQUE_OPTION_POOL") ||
+    message.includes("OPTION_POOL_CONFLICT") ||
+    message.includes("DUPLICATE_TARGET_WORDS") ||
+    message.includes("Need at least") ||
+    message.includes("Vocabulary question generation requires")
+  ) {
+    return "題目產生失敗：目前可用單字不足以產生 10 題且 10 題內選項不重複。請確認前端有傳入完整單字庫 allVocabList / fullVocabList / wordBank，或增加可用單字範圍後再試一次。";
+  }
+
+  if (message.includes("API_KEY")) {
+    return message;
+  }
+
+  return "題目產生失敗，請稍後再試；若持續發生，請檢查單字庫資料格式是否完整。";
+}
+
 // ── Health ────────────────────────────────────────────────────
 app.get("/api/health", (_req, res) => res.json({ status: "ok" }));
 
@@ -816,7 +860,10 @@ app.post("/api/generate-vocab", async (req, res) => {
     });
   } catch (error: any) {
     console.error("Vocab error:", error);
-    res.status(500).json({ success: false, error: error.message });
+    res.status(500).json({
+      success: false,
+      error: toUserFriendlyVocabError(error)
+    });
   }
 });
 
