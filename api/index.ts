@@ -8,6 +8,10 @@ dotenv.config();
 const app = express();
 app.use(express.json({ limit: "20mb" }));
 
+const VOCAB_QUESTION_COUNT = 10;
+const OPTIONS_PER_QUESTION = 4;
+const UNIQUE_OPTION_WORDS_REQUIRED = VOCAB_QUESTION_COUNT * OPTIONS_PER_QUESTION;
+
 let aiInstance: GoogleGenAI | null = null;
 function getGenAI(): GoogleGenAI {
   if (!aiInstance) {
@@ -224,6 +228,156 @@ function cleanVocabularyList(vocabList: any[]) {
   });
 }
 
+function parseNumberValue(value: any): number | null {
+  if (value === null || value === undefined) return null;
+  const match = String(value).match(/\d+/);
+  return match ? Number(match[0]) : null;
+}
+
+function getLevelNumber(v: any): number | null {
+  return parseNumberValue(v?.level ?? v?.levelName ?? v?.selectedLevel);
+}
+
+function getUnitNumber(v: any): number | null {
+  return parseNumberValue(v?.unit ?? v?.unitName ?? v?.selectedUnit);
+}
+
+function inferSelectedLevelUnit(selectedList: any[], explicitLevel?: any, explicitUnit?: any) {
+  const explicitLevelNum = parseNumberValue(explicitLevel);
+  const explicitUnitNum = parseNumberValue(explicitUnit);
+  if (explicitLevelNum !== null || explicitUnitNum !== null) {
+    return { level: explicitLevelNum, unit: explicitUnitNum };
+  }
+
+  const levelCounts = new Map<number, number>();
+  const unitCounts = new Map<number, number>();
+
+  for (const item of selectedList) {
+    const level = getLevelNumber(item);
+    const unit = getUnitNumber(item);
+    if (level !== null) levelCounts.set(level, (levelCounts.get(level) || 0) + 1);
+    if (unit !== null) unitCounts.set(unit, (unitCounts.get(unit) || 0) + 1);
+  }
+
+  const mostCommon = (map: Map<number, number>) => {
+    let best: number | null = null;
+    let bestCount = -1;
+    for (const [num, count] of map.entries()) {
+      if (count > bestCount || (count === bestCount && best !== null && num > best)) {
+        best = num;
+        bestCount = count;
+      }
+    }
+    return best;
+  };
+
+  return { level: mostCommon(levelCounts), unit: mostCommon(unitCounts) };
+}
+
+function isWithinPreviousLevelUnitRange(v: any, selectedLevel: number | null, selectedUnit: number | null): boolean {
+  const level = getLevelNumber(v);
+  const unit = getUnitNumber(v);
+
+  if (selectedLevel === null && selectedUnit === null) return true;
+
+  if (selectedLevel !== null && level !== null) {
+    if (level < selectedLevel) return true;
+    if (level > selectedLevel) return false;
+    if (selectedUnit !== null && unit !== null) return unit <= selectedUnit;
+    return true;
+  }
+
+  if (selectedUnit !== null && unit !== null) {
+    return unit <= selectedUnit;
+  }
+
+  return true;
+}
+
+function sortSupplementPoolByScope(vocabPool: any[], selectedLevel: number | null, selectedUnit: number | null) {
+  return [...vocabPool].sort((a: any, b: any) => {
+    const levelA = getLevelNumber(a) ?? -1;
+    const levelB = getLevelNumber(b) ?? -1;
+    const unitA = getUnitNumber(a) ?? -1;
+    const unitB = getUnitNumber(b) ?? -1;
+
+    if (selectedLevel !== null) {
+      const levelDistanceA = Math.abs(selectedLevel - levelA);
+      const levelDistanceB = Math.abs(selectedLevel - levelB);
+      if (levelDistanceA !== levelDistanceB) return levelDistanceA - levelDistanceB;
+    }
+
+    if (selectedUnit !== null && levelA === levelB) {
+      const unitDistanceA = Math.abs(selectedUnit - unitA);
+      const unitDistanceB = Math.abs(selectedUnit - unitB);
+      if (unitDistanceA !== unitDistanceB) return unitDistanceA - unitDistanceB;
+    }
+
+    if (levelA !== levelB) return levelB - levelA;
+    return unitB - unitA;
+  });
+}
+
+function mergeUniqueVocabularyLists(...lists: any[][]) {
+  const seen = new Set<string>();
+  const merged: any[] = [];
+
+  for (const list of lists) {
+    for (const item of cleanVocabularyList(list || [])) {
+      const key = item.word.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      merged.push(item);
+    }
+  }
+
+  return merged;
+}
+
+function buildSupplementedVocabPool(
+  selectedList: any[],
+  fullBankList: any[],
+  selectedLevel?: any,
+  selectedUnit?: any
+) {
+  const selectedClean = cleanVocabularyList(selectedList || []);
+  const fullClean = mergeUniqueVocabularyLists(fullBankList || [], selectedList || []);
+  const scope = inferSelectedLevelUnit(selectedClean, selectedLevel, selectedUnit);
+
+  const selectedKeys = new Set(selectedClean.map((v: any) => v.word.toLowerCase()));
+  const scopedSupplement = fullClean.filter((v: any) =>
+    !selectedKeys.has(v.word.toLowerCase()) &&
+    isWithinPreviousLevelUnitRange(v, scope.level, scope.unit)
+  );
+
+  const broaderSupplement = fullClean.filter((v: any) =>
+    !selectedKeys.has(v.word.toLowerCase()) &&
+    !scopedSupplement.some((s: any) => s.word.toLowerCase() === v.word.toLowerCase())
+  );
+
+  return {
+    selectedWords: selectedClean,
+    vocabPool: mergeUniqueVocabularyLists(
+      selectedClean,
+      sortSupplementPoolByScope(scopedSupplement, scope.level, scope.unit),
+      sortSupplementPoolByScope(broaderSupplement, scope.level, scope.unit)
+    ),
+    supplementScope: scope
+  };
+}
+
+function pickTargetWords(selectedWords: any[], vocabPool: any[], count: number = VOCAB_QUESTION_COUNT) {
+  const primary = shuffle(selectedWords);
+  const primaryKeys = new Set(primary.map((v: any) => v.word.toLowerCase()));
+  const supplement = shuffle(vocabPool.filter((v: any) => !primaryKeys.has(v.word.toLowerCase())));
+
+  const picked = [...primary, ...supplement].slice(0, count);
+  if (picked.length < count) {
+    throw new Error(`Vocabulary question generation requires ${count} unique target words. Only ${picked.length} were available after supplementing from the word bank.`);
+  }
+  return picked;
+}
+
 function escapeRegExp(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
@@ -233,21 +387,17 @@ function answerLeaksIntoQuestion(question: string, word: string): boolean {
   const w = String(word || "").toLowerCase().trim();
   if (!q || !w) return true;
 
-  const exact = new RegExp(`\\b${escapeRegExp(w)}\\b`, "i");
+  const exact = new RegExp(`\b${escapeRegExp(w)}\b`, "i");
   if (exact.test(q)) return true;
 
   const suffixes = ["s", "es", "ed", "ing", "er", "est", "ly", "ion", "ions", "ment", "ments", "ity", "ities", "al", "ally"];
   for (const suffix of suffixes) {
     const form = `${w}${suffix}`;
-    const re = new RegExp(`\\b${escapeRegExp(form)}\\b`, "i");
+    const re = new RegExp(`\b${escapeRegExp(form)}\b`, "i");
     if (re.test(q)) return true;
   }
 
   return false;
-}
-
-function pickTargetWords(vocabList: any[], count: number = 10) {
-  return shuffle(cleanVocabularyList(vocabList)).slice(0, count);
 }
 
 function buildTargetWordList(targetWords: any[]): string {
@@ -262,7 +412,8 @@ function buildTargetWordList(targetWords: any[]): string {
 function buildOptionsFromVocabPool(
   targetWord: any,
   vocabPool: any[],
-  correctAnswer: string
+  correctAnswer: string,
+  usedOptionWords: Set<string>
 ): string[] {
   const letters = ["A", "B", "C", "D"];
   const correctIndex = letters.indexOf(correctAnswer);
@@ -271,27 +422,35 @@ function buildOptionsFromVocabPool(
   const target = String(targetWord.word || "").trim();
   const targetKey = target.toLowerCase();
 
-  const samePos = vocabPool.filter((v: any) =>
-    v.word.toLowerCase() !== targetKey &&
-    v.pos === targetWord.pos
-  );
+  if (usedOptionWords.has(targetKey)) {
+    throw new Error(`Target word "${target}" was already used as an option in this 10-question set.`);
+  }
 
-  const fallback = vocabPool.filter((v: any) =>
-    v.word.toLowerCase() !== targetKey &&
-    v.pos !== targetWord.pos
-  );
+  const samePos = vocabPool.filter((v: any) => {
+    const key = v.word.toLowerCase();
+    return key !== targetKey && !usedOptionWords.has(key) && v.pos === targetWord.pos;
+  });
+
+  const fallback = vocabPool.filter((v: any) => {
+    const key = v.word.toLowerCase();
+    return key !== targetKey && !usedOptionWords.has(key) && v.pos !== targetWord.pos;
+  });
 
   const distractors = [
     ...shuffle(samePos),
     ...shuffle(fallback)
-  ].slice(0, 3);
+  ].slice(0, OPTIONS_PER_QUESTION - 1);
 
-  if (distractors.length < 3) {
-    throw new Error("At least 4 unique vocabulary words are required to generate 4 MCQ options from the uploaded list.");
+  if (distractors.length < OPTIONS_PER_QUESTION - 1) {
+    throw new Error(`Not enough unused vocabulary words to create non-repeating options. Need ${UNIQUE_OPTION_WORDS_REQUIRED} unique words for ${VOCAB_QUESTION_COUNT} questions.`);
   }
 
   const optionWords = distractors.map((v: any) => v.word);
   optionWords.splice(correctIndex, 0, target);
+
+  for (const word of optionWords) {
+    usedOptionWords.add(String(word).toLowerCase());
+  }
 
   return optionWords.map((word, idx) => `(${letters[idx]}) ${word}`);
 }
@@ -318,11 +477,16 @@ function assembleVocabQuestions(
   answerKey: string[]
 ) {
   const generated = Array.isArray(data?.vocabQuestions) ? data.vocabQuestions : [];
+  const usedOptionWords = new Set<string>();
+
+  if (vocabPool.length < UNIQUE_OPTION_WORDS_REQUIRED) {
+    throw new Error(`Need at least ${UNIQUE_OPTION_WORDS_REQUIRED} unique vocabulary words to generate ${VOCAB_QUESTION_COUNT} questions with no repeated options. Only ${vocabPool.length} unique words are available after supplementing from the word bank.`);
+  }
 
   return {
     vocabQuestions: targetWords.map((targetWord: any, idx: number) => {
       const raw = generated[idx] || {};
-      const options = buildOptionsFromVocabPool(targetWord, vocabPool, answerKey[idx]);
+      const options = buildOptionsFromVocabPool(targetWord, vocabPool, answerKey[idx], usedOptionWords);
       return {
         id: `v${idx + 1}`,
         question: String(raw.question || "").trim(),
@@ -408,6 +572,10 @@ async function validateVocabSuite(
   }
 
   const checkedQuestions = questions.slice(0, targetWords.length);
+  const allOptionWords = checkedQuestions.flatMap((q: any) => normalizeOptions(q.options).map(optionWord).map((w: string) => w.toLowerCase()));
+  if (new Set(allOptionWords).size !== allOptionWords.length) {
+    issues.push("Options must not repeat anywhere within the 10-question vocabulary set.");
+  }
 
   for (let i = 0; i < checkedQuestions.length; i++) {
     issues.push(
@@ -564,20 +732,36 @@ app.get("/api/health", (_req, res) => res.json({ status: "ok" }));
 // ── Vocab: GPT writes stems; server controls options 100% ────
 app.post("/api/generate-vocab", async (req, res) => {
   try {
-    const { vocabList } = req.body;
+    const {
+      vocabList,
+      allVocabList,
+      fullVocabList,
+      wordBank,
+      selectedLevel,
+      selectedUnit
+    } = req.body;
     verifyApiKeys();
 
-    const vocabPool = cleanVocabularyList(vocabList || []);
-    if (vocabPool.length < 4) {
-      throw new Error("At least 4 unique vocabulary words are required to generate Vocabulary MCQ options.");
+    const fullBank = allVocabList || fullVocabList || wordBank || vocabList || [];
+    const { selectedWords, vocabPool, supplementScope } = buildSupplementedVocabPool(
+      vocabList || [],
+      fullBank,
+      selectedLevel,
+      selectedUnit
+    );
+
+    if (vocabPool.length < UNIQUE_OPTION_WORDS_REQUIRED) {
+      throw new Error(`Need at least ${UNIQUE_OPTION_WORDS_REQUIRED} unique vocabulary words to generate ${VOCAB_QUESTION_COUNT} questions with no repeated options. Please pass the full word bank as allVocabList/fullVocabList/wordBank.`);
     }
 
-    const targetWords = pickTargetWords(vocabPool, 10);
+    const targetWords = pickTargetWords(selectedWords, vocabPool, VOCAB_QUESTION_COUNT);
     if (targetWords.length === 0) {
       throw new Error("No usable vocabulary words were provided.");
     }
 
-    const answerKey = makeAnswerKey(targetWords.length, ["A", "B", "C", "D"]);
+    console.log("Vocab supplement scope:", supplementScope);
+
+    const answerKey = makeAnswerKey(VOCAB_QUESTION_COUNT, ["A", "B", "C", "D"]);
 
     const stemOnlySchema = {
       type: Type.OBJECT,
@@ -623,7 +807,7 @@ app.post("/api/generate-vocab", async (req, res) => {
 
     if (data?.vocabQuestions?.length > 0) {
       data.vocabQuestions[0]._warning =
-        "AI 出題提醒：題幹由 AI 產生；選項與答案位置已由系統從指定字彙表自動產生。正式使用前仍建議人工檢查。 / AI-generated stems; options and answer positions are generated programmatically from the provided vocabulary list.";
+        "AI 出題提醒：題幹由 AI 產生；選項與答案位置已由系統從指定字彙表與完整單字庫自動產生，10 題內選項不重複。正式使用前仍建議人工檢查。 / AI-generated stems; options and answer positions are generated programmatically from the selected vocabulary list and full word bank with no repeated options within the 10-question set.";
     }
 
     res.json({
