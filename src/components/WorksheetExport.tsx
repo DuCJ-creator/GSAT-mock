@@ -26,13 +26,11 @@ export default function WorksheetExport({ suite, onBack }: WorksheetExportProps)
 if (suite.vocabQuestions && suite.vocabQuestions.length > 0) {
   md += `#### Part I Solution:\n`;
 
-  suite.vocabQuestions.forEach((q, idx) => {
-    md += `Q${idx + 1}: (${q.correctAnswer})\n`;
-
-    if (includeExplanations) {
-      md += `解析: ${q.explanation}\n\n`;
-    }
-  });
+suite.vocabQuestions.forEach((q, idx) => {
+  const qNumber = idx + 1;
+  md += `  Q${qNumber}: (${q.correctAnswer})\n`;
+  if (includeExplanations) md += `   解析: ${q.explanation || ""}\n\n`;
+});
 }
 
     if (suite.readingPassages && suite.readingPassages.length > 0) {
@@ -57,11 +55,11 @@ if (suite.vocabQuestions && suite.vocabQuestions.length > 0) {
 
     if (suite.vocabQuestions && suite.vocabQuestions.length > 0) {
       md += `#### Part I Solution:\n`;
-      suite.vocabQuestions.forEach((q, idx) => {
-        const qNumber = 11 + (pIdx * 4) + qIdx;
-md += `  Q${qNumber}: (${q.correctAnswer})\n`;
-        if (includeExplanations) md += `   解析: ${q.explanation}\n\n`;
-      });
+  suite.vocabQuestions.forEach((q, idx) => {
+  const qNumber = idx + 1;
+  md += `  Q${qNumber}: (${q.correctAnswer})\n`;
+  if (includeExplanations) md += `   解析: ${q.explanation || ""}\n\n`;
+});
       md += `\n`;
     }
 
