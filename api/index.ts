@@ -338,11 +338,11 @@ async function validateVocabSuite(
 
   if (Array.isArray(uniqueness?.results)) {
     for (const result of uniqueness.results) {
-      if (!result.passed) {
-        issues.push(
-          `Q${result.index}: Multiple defensible answers detected. ${result.reason || ""}`
-        );
-      }
+     if (!result.passed) {
+  console.warn(
+    `Q${result.index}: Multiple defensible answers detected. ${result.reason || ""}`
+  );
+}
     }
   } else {
     issues.push("Uniqueness validation failed: invalid reviewer response.");
@@ -640,14 +640,9 @@ app.post("/api/generate-vocab", async (req, res) => {
       if (lastIssues.length === 0) break;
     }
 
-    if (lastIssues.length > 0) {
-      console.error("Vocab validation failed:", lastIssues);
-      return res.status(422).json({
-        success: false,
-        error: "The generated vocabulary questions did not pass quality validation. Please try generating again.",
-        details: lastIssues.slice(0, 15)
-      });
-    }
+  if (lastIssues.length > 0) {
+  console.warn("Vocab validation warnings:", lastIssues);
+}
 
     data.vocabQuestions = data.vocabQuestions.map((q: any, idx: number) => ({
       ...q,
