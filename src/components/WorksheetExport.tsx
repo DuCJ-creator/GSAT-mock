@@ -18,19 +18,23 @@ export default function WorksheetExport({ suite, onBack }: WorksheetExportProps)
   const [copied, setCopied] = useState(false);
 
   const generateMarkdown = () => {
-    let md = `# GSAT English Mock Paper Creator - English Practice Worksheet\n`;
-    md += `## Designed by Tr. Shirley Du (學測英文模擬試卷）\n\n`;
+    let md = `# GSAT English Mock V/R Paper Creator - English Practice Worksheet\n`;
+    md += `## Designed by Tr. Shirley Du (學測英文詞彙/閱讀模擬試卷）\n\n`;
     md += `Class: ______________  Name: ______________  Date: ______________  Score: ______________\n`;
     md += `========================================================================\n\n`;
 
 if (suite.vocabQuestions && suite.vocabQuestions.length > 0) {
-  md += `#### Part I Solution:\n`;
+  md += `### Part I: Multiple-Choice Questions (10 GSAT-Level Questions)\n`;
+  md += `*Directions: Choose the best word to fill in each blank.*\n\n`;
 
-suite.vocabQuestions.forEach((q, idx) => {
-  const qNumber = idx + 1;
-  md += `  Q${qNumber}: (${q.correctAnswer})\n`;
-  if (includeExplanations) md += `   解析: ${q.explanation || ""}\n\n`;
-});
+  suite.vocabQuestions.forEach((q, idx) => {
+    const questionText = q.question || q.prompt || q.sentence || q.stem || "";
+
+    md += `${idx + 1}. ${questionText}\n`;
+    md += `   ${normalizeOptions(q.options).join("   ")}\n\n`;
+  });
+
+  md += `\n`;
 }
 
     if (suite.readingPassages && suite.readingPassages.length > 0) {
