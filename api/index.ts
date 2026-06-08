@@ -48,6 +48,67 @@ async function callOpenAIHighQuality(system: string, user: string): Promise<any>
   return JSON.parse((response.choices[0].message.content || "").trim());
 }
 
+async function validateUniquenessBatch(
+  questions: any[]
+): Promise<{
+  results: {
+    index: number;
+    passed: boolean;
+    reason?: string;
+  }[];
+}> {
+  const items = questions.map((q: any, idx: number) => {
+    const options = normalizeOptions(q.options);
+    const correctAnswer = normalizeAnswer(q.correctAnswer);
+    const correctIndex = ["A", "B", "C", "D"].indexOf(correctAnswer);
+    const correctWord = correctIndex >= 0 ? optionWord(options[correctIndex] || "") : "";
+
+    return {
+      index: idx + 1,
+      question: q.question,
+      options,
+      correctAnswerLetter: correctAnswer,
+      correctAnswerWord: correctWord
+    };
+  });
+
+ const result = await callOpenAIHighQuality(
+  `You are a strict GSAT English vocabulary item reviewer. 
+Your job is to detect whether any question has more than one defensible answer.`,
+    `
+Review the following vocabulary multiple-choice questions.
+
+For each question, determine whether ONLY ONE answer is defensible.
+
+A question FAILS if:
+- another option could reasonably fit the sentence,
+- the context is too weak to eliminate all distractors,
+- two or more options could be defended by a competent English teacher.
+
+A question PASSES only if:
+- the correct answer is the only natural and logical choice,
+- all distractors are clearly eliminated by contextual clues.
+
+Questions:
+${JSON.stringify(items, null, 2)}
+
+Return ONLY this JSON shape:
+
+{
+  "results": [
+    {
+      "index": 1,
+      "passed": true,
+      "reason": ""
+    }
+  ]
+}
+`
+  );
+
+  return result;
+}
+
 async function callOpenAI(system: string, user: string): Promise<any> {
   const openai = getOpenAI();
   const model = process.env.OPENAI_API_MODEL || "gpt-4o-mini";
@@ -196,7 +257,6 @@ function buildTargetWordList(targetWords: any[], answerKey: string[]): string {
 - Correct answer position: ${answerKey[i]}`;
   }).join("\n\n");
 }
-
 function validateVocabQuestion(q: any, expected: any, expectedAnswer: string, index: number): string[] {
   const issues: string[] = [];
   const id = `Q${index + 1}`;
@@ -243,7 +303,11 @@ function validateVocabQuestion(q: any, expected: any, expectedAnswer: string, in
   return issues;
 }
 
-function validateVocabSuite(data: any, targetWords: any[], answerKey: string[]): string[] {
+async function validateVocabSuite(
+  data: any,
+  targetWords: any[],
+  answerKey: string[]
+): Promise<string[]> {
   const questions = data?.vocabQuestions;
   const issues: string[] = [];
 
@@ -252,12 +316,37 @@ function validateVocabSuite(data: any, targetWords: any[], answerKey: string[]):
   }
 
   if (questions.length !== targetWords.length) {
-    issues.push(`vocabQuestions must contain exactly ${targetWords.length} items; received ${questions.length}.`);
+    issues.push(
+      `vocabQuestions must contain exactly ${targetWords.length} items; received ${questions.length}.`
+    );
   }
 
-  questions.slice(0, targetWords.length).forEach((q: any, i: number) => {
-    issues.push(...validateVocabQuestion(q, targetWords[i], answerKey[i], i));
-  });
+  const checkedQuestions = questions.slice(0, targetWords.length);
+
+  for (let i = 0; i < checkedQuestions.length; i++) {
+    issues.push(
+      ...validateVocabQuestion(
+        checkedQuestions[i],
+        targetWords[i],
+        answerKey[i],
+        i
+      )
+    );
+  }
+
+  const uniqueness = await validateUniquenessBatch(checkedQuestions);
+
+  if (Array.isArray(uniqueness?.results)) {
+    for (const result of uniqueness.results) {
+      if (!result.passed) {
+        issues.push(
+          `Q${result.index}: Multiple defensible answers detected. ${result.reason || ""}`
+        );
+      }
+    }
+  } else {
+    issues.push("Uniqueness validation failed: invalid reviewer response.");
+  }
 
   return issues;
 }
@@ -310,12 +399,48 @@ visual / adj. / 視覺的 → perception / presentation mode
 alleviate / v. / 減輕 → reduce a problem, pain, or burden
 
 STEP 2 — Write a natural GSAT-level sentence.
-- The sentence must contain exactly one blank: ______
+
+The sentence must contain exactly one blank: ______
+
+Requirements:
+
 - The blank must require the CSV POS grammatically.
 - The context must fit the Chinese meaning.
 - The sentence must sound like authentic academic or formal English.
 - The sentence must be realistic, natural, and factually reasonable.
 - Avoid artificial phrases, childish examples, and strange situations.
+
+CONTEXTUAL CLUE REQUIREMENT:
+
+The sentence MUST contain sufficient contextual clues so that
+ONLY ONE option can logically and naturally fit.
+
+The contextual clues should come from:
+
+- collocation
+- real-world knowledge
+- cause-and-effect relationships
+- purpose/result relationships
+- specific situational details
+- academic or professional contexts
+
+Do NOT create sentences where two or more options are reasonably acceptable.
+
+Bad example:
+
+The museum staff carefully ______ the floor.
+
+Reason:
+Multiple answers may fit (wax, polish, scrub, mop).
+
+Good example:
+
+The museum staff carefully ______ the hardwood floor with a protective coating to preserve its shine and prevent moisture damage.
+
+Reason:
+The clue "protective coating" uniquely points to wax.
+
+Before finalizing the sentence, verify that an expert English teacher would expect only one answer.
 
 STEP 3 — Create high-quality distractors.
 The 3 distractors must:
@@ -359,9 +484,53 @@ The target word MUST NOT appear anywhere in the question sentence.
 Do not include direct morphological variants either.
 If the target word appears in the sentence, the item fails.
 
+STEP 3.5 — Uniqueness Verification
+
+For each question:
+
+1. Hide the correct answer.
+2. Test each distractor individually in the sentence.
+3. Ask:
+
+"Could this option reasonably fit the sentence?"
+
+4. If YES for any distractor,
+   rewrite the sentence with stronger contextual clues.
+
+5. Continue until only one answer remains plausible.
+
+The final item must have:
+
+- one grammatically correct answer
+- one semantically correct answer
+- three distractors that are plausible at first glance
+  but clearly incorrect once the contextual clues are considered
+  
 ANSWER POSITION RULE:
 The correct answer must be placed at the exact pre-assigned answer position for that question.
 The correct option text must exactly match the assigned target word.
+
+GSAT AUTHENTICITY RULE
+
+Taiwan GSAT vocabulary questions are not solved by grammar alone.
+
+Students must rely on contextual clues to distinguish between
+semantically related words.
+
+Therefore:
+
+- Options should be semantically related.
+- Contextual clues must be strong.
+- The answer should become unique because of the context,
+  not because the other options are grammatically impossible.
+
+Aim for:
+
+Difficult options
++
+Clear contextual clues
+=
+One unique answer
 
 QUALITY CHECK BEFORE RETURNING:
 For every question, verify:
@@ -373,6 +542,15 @@ For every question, verify:
 6. Distractors are semantically related to the Chinese meaning.
 7. The sentence is natural and GSAT-appropriate.
 8. Only one answer is defensible.
+
+A distractor is considered invalid if it can reasonably fit the sentence
+without contradicting the context.
+
+The sentence must provide enough evidence to eliminate every distractor.
+
+If two options could both be defended by a competent English teacher,
+the item must be rewritten.
+
 9. The explanation teaches the semantic and grammatical reason.
 
 FORMAT:
@@ -454,7 +632,11 @@ app.post("/api/generate-vocab", async (req, res) => {
         data.vocabQuestions = data.vocabQuestions.slice(0, targetWords.length);
       }
 
-      lastIssues = validateVocabSuite(data, targetWords, answerKey);
+     lastIssues = await validateVocabSuite(
+  data,
+  targetWords,
+  answerKey
+);
       if (lastIssues.length === 0) break;
     }
 
