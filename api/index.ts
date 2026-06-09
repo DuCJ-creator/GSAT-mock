@@ -39,12 +39,15 @@ function verifyApiKeys() {
 }
 
 async function callOpenAIHighQuality(system: string, user: string): Promise<any> {
+  // Cost-saving default: use gpt-4o-mini unless explicitly overridden.
+  // Set OPENAI_API_MODEL=gpt-4o only when you really need premium quality.
   const openai = getOpenAI();
+  const model = process.env.OPENAI_API_MODEL || "gpt-4o-mini";
   const response = await openai.chat.completions.create({
-    model: "gpt-4o",
+    model,
     messages: [
       { role: "system", content: system },
-      { role: "user", content: user + "\n\nCRITICAL: Return ONLY a valid JSON object. No markdown, no preamble." }
+      { role: "user", content: user + "\nReturn ONLY valid JSON. No markdown." }
     ],
     response_format: { type: "json_object" },
     temperature: 0.3,
@@ -401,12 +404,10 @@ function answerLeaksIntoQuestion(question: string, word: string): boolean {
 }
 
 function buildTargetWordList(targetWords: any[]): string {
-  return targetWords.map((vw: any, i: number) => {
-    return `Q${i + 1}
-- Target word: ${vw.word}
-- POS from CSV: ${vw.rawPos || vw.pos || "unspecified"} (${vw.pos || "unspecified"})
-- Chinese meaning from CSV: ${vw.meaning || "未提供"}`;
-  }).join("\n\n");
+  // Compact format to reduce prompt tokens.
+  return targetWords.map((vw: any, i: number) =>
+    `Q${i + 1}: ${vw.word} | POS=${vw.rawPos || vw.pos || "unspecified"} | meaning=${vw.meaning || "未提供"}`
+  ).join("\n");
 }
 
 function buildOptionsFromVocabPool(
@@ -613,18 +614,17 @@ async function validateVocabSuite(
     );
   }
 
-  const uniqueness = await validateUniquenessBatch(checkedQuestions);
-
-  if (Array.isArray(uniqueness?.results)) {
-    for (const result of uniqueness.results) {
-      if (!result.passed) {
-        console.warn(
-          `Q${result.index}: Multiple defensible answers detected. ${result.reason || ""}`
-        );
+  // Cost-saving: skip the second AI reviewer call in production by default.
+  // Enable only when debugging item quality: ENABLE_AI_REVIEWER=true
+  if (process.env.ENABLE_AI_REVIEWER === "true") {
+    const uniqueness = await validateUniquenessBatch(checkedQuestions);
+    if (Array.isArray(uniqueness?.results)) {
+      for (const result of uniqueness.results) {
+        if (!result.passed) {
+          console.warn(`Q${result.index}: Multiple defensible answers detected. ${result.reason || ""}`);
+        }
       }
     }
-  } else {
-    issues.push("Uniqueness validation failed: invalid reviewer response.");
   }
 
   return issues;
@@ -634,118 +634,27 @@ function buildVocabPrompt(targetWords: any[], previousIssues: string[] = []) {
   const targetList = buildTargetWordList(targetWords);
 
   const correctionBlock = previousIssues.length > 0
-    ? `
-PREVIOUS ATTEMPT FAILED SERVER VALIDATION.
-You MUST fix every issue below:
-${previousIssues.map((x, i) => `${i + 1}. ${x}`).join("\n")}
+    ? `Fix these validation issues:
+${previousIssues.slice(0, 8).map((x, i) => `${i + 1}. ${x}`).join("\n")}
 `
     : "";
 
-  const system = `You are a senior GSAT English test writer with 20+ years of experience creating official Taiwanese GSAT-style vocabulary question stems. You are strict about part of speech, meaning, collocation, contextual clues, and natural English.`;
+  const system = `You write Taiwan GSAT-style English vocabulary question stems. Return compact JSON only.`;
 
-  const user = `${correctionBlock}
+  const user = `${correctionBlock}Generate exactly ${targetWords.length} vocabulary question stems only.
 
-Generate EXACTLY ${targetWords.length} high-quality GSAT-style vocabulary question STEMS only.
+Server handles options and answer letters. Do not write options, A/B/C/D, or explanations.
 
-IMPORTANT SYSTEM DESIGN:
-You are responsible ONLY for writing the sentence stem.
-The server will create all answer options and answer positions programmatically from the uploaded CSV vocabulary list.
+For each target word, write one natural GSAT-level sentence with exactly one blank: ______
+The blank must grammatically require the target POS and semantically fit the Chinese meaning.
+Do not include the target word or its obvious inflected/derived forms in the sentence.
+Use enough context so the target word is the natural completion.
 
-DO NOT generate answer options.
-DO NOT generate distractors.
-DO NOT decide the correct answer letter.
-DO NOT include A/B/C/D anywhere.
-
-You MUST use the target words below exactly as the hidden correct answers.
-Each question must test the assigned word from the CSV.
-Do not skip any target word.
-Do not repeat any target word.
-Do not replace the target word with a synonym.
-
-TARGET WORDS FROM CSV:
+Targets:
 ${targetList}
 
-CORE PRINCIPLE:
-The CSV provides the target word, its part of speech, and its Chinese meaning.
-You MUST use all three:
-1. Use the target word as the hidden correct answer.
-2. Use the CSV POS to control the grammar of the blank.
-3. Use the Chinese meaning to create a clear, natural context.
-
-MANDATORY PROCESS FOR EACH QUESTION:
-
-STEP 1 — Understand the target word.
-For each assigned word:
-- Read its English word.
-- Read its POS from CSV.
-- Read its Chinese meaning from CSV.
-- Infer the correct usage and collocation.
-
-Examples:
-testimony / n. / 證詞 → legal communication
-durability / n. / 耐久性 → product quality
-visual / adj. / 視覺的 → perception / presentation mode
-alleviate / v. / 減輕 → reduce a problem, pain, or burden
-
-STEP 2 — Write a natural GSAT-level sentence.
-
-The sentence must contain exactly one blank: ______
-
-Requirements:
-- The blank must require the CSV POS grammatically.
-- The context must fit the Chinese meaning.
-- The sentence must sound like authentic academic or formal English.
-- The sentence must be realistic, natural, and factually reasonable.
-- Avoid artificial phrases, childish examples, and strange situations.
-- The target word must be the most natural completion.
-
-CONTEXTUAL CLUE REQUIREMENT:
-The sentence MUST contain strong contextual clues.
-The clues should come from:
-- collocation
-- real-world knowledge
-- cause-and-effect relationships
-- purpose/result relationships
-- specific situational details
-- academic or professional contexts
-
-Bad example:
-The museum staff carefully ______ the floor.
-Reason: context is too weak.
-
-Good example:
-The museum staff carefully ______ the hardwood floor with a protective coating to preserve its shine and prevent moisture damage.
-Reason: the clue "protective coating" makes the intended meaning clear.
-
-ANTI-LEAK RULE:
-The target word MUST NOT appear anywhere in the question sentence.
-Do not include direct morphological variants either.
-If the target word appears in the sentence, the item fails.
-
-QUALITY CHECK BEFORE RETURNING:
-For every question, verify:
-1. It tests the exact assigned CSV word.
-2. The sentence contains exactly one blank.
-3. The target word does not appear in the sentence.
-4. The blank grammatically requires the CSV POS.
-5. The sentence is natural and GSAT-appropriate.
-6. The sentence provides clear semantic and collocational clues.
-
-FORMAT:
-- id: "v1" through "v${targetWords.length}"
-- question: one complete sentence with exactly "______"
-- wordTested: exact CSV target word
-
-Return ONLY this JSON shape:
-{
-  "vocabQuestions": [
-    {
-      "id": "v1",
-      "question": "... ______ ...",
-      "wordTested": "..."
-    }
-  ]
-}`;
+Return JSON only:
+{"vocabQuestions":[{"id":"v1","question":"... ______ ...","wordTested":"..."}]}`;
 
   return { system, user };
 }
@@ -830,7 +739,7 @@ app.post("/api/generate-vocab", async (req, res) => {
     let rawData: any = null;
     let data: any = null;
 
-    for (let attempt = 1; attempt <= 3; attempt++) {
+    for (let attempt = 1; attempt <= 2; attempt++) {
       const { system, user } = buildVocabPrompt(targetWords, lastIssues);
       rawData = process.env.OPENAI_API_KEY
         ? await callOpenAIHighQuality(system, user)
@@ -891,7 +800,7 @@ app.post("/api/generate-reading", async (req, res) => {
     const levels = selectedReadingLevels?.length > 0 ? selectedReadingLevels : ["essential"];
     const cleanWords = (Array.isArray(vocabList) ? vocabList : [])
       .filter((vw: any) => vw?.word)
-      .slice(0, 60)
+      .slice(0, 30)
       .map((vw: any) => `"${vw.word}" (POS: ${vw.pos || "unspecified"}; Meaning: ${vw.meaning || "unspecified"})`);
 
     const vocabString = cleanWords.length > 0
@@ -905,44 +814,21 @@ app.post("/api/generate-reading", async (req, res) => {
 
     const system = `You are a senior GSAT English reading comprehension writer for Taiwan high school exams. Your passages and questions must be natural, precise, and unambiguous.`;
 
-    const user = `Generate reading comprehension passages for levels: ${levels.join(", ")} using vocabulary references below:
+    const user = `Generate exactly ${levels.length} GSAT-style reading passage(s) for levels: ${levels.join(", ")}.
+
+Use some reference vocabulary naturally when appropriate:
 ${vocabString}
 
-Pre-assigned correct answer positions: ${keyDescriptions}
+Correct answer positions: ${keyDescriptions}
 
-MANDATORY PROCESS for each passage:
+For each passage:
+- 220-260 words, natural academic/magazine English.
+- 4 questions: main idea, detail, vocab-in-context, inference/purpose.
+- Options must be unambiguous and supported by the passage only.
+- Put the correct answer at the assigned letter.
+- Explanations in Traditional Chinese, one concise sentence each.
 
-STEP 1: Choose a specific, genuinely interesting topic appropriate for the level.
-Write 250-300 words that read like a real academic or magazine article.
-
-STEP 2: Naturally incorporate some vocabulary from the reference list when appropriate.
-Use the CSV meanings to avoid misusing words.
-
-STEP 3: Write 4 comprehension questions:
-- Q1: Main idea or best title
-- Q2: Specific detail directly supported by the passage
-- Q3: Vocabulary or phrase in context
-- Q4: Inference, author's purpose, or implication
-
-STEP 4: For each question, write 4 options and place the correct one at the pre-assigned letter.
-- Each correct answer must be directly and unambiguously supported by the passage.
-- Each distractor must be clearly wrong: contradicted, not mentioned, too broad, too narrow, or a plausible misreading.
-- Avoid choices that are correct due to outside general knowledge.
-
-QUALITY STANDARDS:
-- Natural academic English.
-- Factually reasonable content.
-- No ambiguous questions.
-- No two options can both be defensible.
-- Traditional Chinese explanations must cite the relevant idea from the passage.
-
-FORMAT:
-level, title, passage, questions.
-Each question must include id, question, options, correctAnswer, explanation.
-
-Return EXACTLY ${levels.length} passage(s).
-
-Return JSON: { "readingPassages": [...exactly ${levels.length} passage(s)...] }`;
+Return JSON only: {"readingPassages":[{"level":"...","title":"...","passage":"...","questions":[{"id":"...","question":"...","options":["(A) ...","(B) ...","(C) ...","(D) ..."],"correctAnswer":"A","explanation":"..."}]}]}`;
 
     const schema = {
       type: Type.OBJECT,
