@@ -39,8 +39,6 @@ function verifyApiKeys() {
 }
 
 async function callOpenAIHighQuality(system: string, user: string): Promise<any> {
-  // Cost-saving default: use gpt-4o-mini unless explicitly overridden.
-  // Set OPENAI_API_MODEL=gpt-4o only when you really need premium quality.
   const openai = getOpenAI();
   const model = process.env.OPENAI_API_MODEL || "gpt-4o-mini";
   const response = await openai.chat.completions.create({
@@ -210,16 +208,46 @@ function normalizePos(pos: any): string {
   return p || "unspecified";
 }
 
+// ── NEW: strip POS tags and bracket annotations from a raw word string ──
+function stripPosFromWord(raw: string): string {
+  // Remove trailing POS tags like "vt", "vi", "n", "adj", "adv", "prep", "conj"
+  // and bracket annotations like "[C]", "[U]", "[C,U]"
+  return raw
+    .replace(/\s+\S*\[.*?\]\S*/g, "")   // remove tokens containing brackets e.g. n[C,U]
+    .replace(/\s+(vt|vi|v|n|noun|adj|adjective|adv|adverb|prep|preposition|conj|conjunction)\b.*/i, "")
+    .trim();
+}
+
+// ── NEW: extract POS from a raw word line e.g. "increase  n[C,U]" → "n" ──
+function extractPosFromLine(raw: string): string {
+  const parts = raw.trim().split(/\s+/);
+  if (parts.length < 2) return "";
+  // POS is everything after the first token; strip bracket annotations
+  return parts.slice(1).join(" ").replace(/\[.*?\]/g, "").trim();
+}
+
 function cleanVocabularyList(vocabList: any[]) {
   const clean = (Array.isArray(vocabList) ? vocabList : [])
-    .map((vw: any) => ({
-      word: String(vw.word || "").trim(),
-      pos: normalizePos(vw.pos),
-      rawPos: String(vw.pos || "").trim(),
-      meaning: String(vw.meaning || "").trim(),
-      level: vw.level,
-      unit: vw.unit
-    }))
+    .map((vw: any) => {
+      const rawWord = String(vw.word || "").trim();
+      // If the word field contains embedded POS (e.g. "gossip vi"), split it out
+      const word = stripPosFromWord(rawWord);
+      const embeddedPos = rawWord !== word ? extractPosFromLine(rawWord) : "";
+      const resolvedPos = vw.pos || embeddedPos;
+
+      // Strip bracket annotations from meaning too e.g. "[U,C]" is not a meaning
+      const rawMeaning = String(vw.meaning || "").trim();
+      const meaning = /^\[.*?\]$/.test(rawMeaning) ? "" : rawMeaning;
+
+      return {
+        word,
+        pos: normalizePos(resolvedPos),
+        rawPos: String(resolvedPos || "").trim(),
+        meaning,
+        level: vw.level,
+        unit: vw.unit
+      };
+    })
     .filter((vw: any) => vw.word.length > 0);
 
   const seen = new Set<string>();
@@ -404,9 +432,8 @@ function answerLeaksIntoQuestion(question: string, word: string): boolean {
 }
 
 function buildTargetWordList(targetWords: any[]): string {
-  // Compact format to reduce prompt tokens.
   return targetWords.map((vw: any, i: number) =>
-    `Q${i + 1}: ${vw.word} | POS=${vw.rawPos || vw.pos || "unspecified"} | meaning=${vw.meaning || "未提供"}`
+    `Q${i + 1}: ${vw.word} | POS=${vw.rawPos || vw.pos || "unspecified"} | meaning=${vw.meaning || "unspecified"}`
   ).join("\n");
 }
 
@@ -424,8 +451,6 @@ function buildOptionsFromVocabPool(
   const target = String(targetWord.word || "").trim();
   const targetKey = target.toLowerCase();
 
-  // A target word may appear only once: as its own correct answer.
-  // Therefore, all 10 target words are pre-reserved and can never be used as distractors.
   if (usedOptionWords.has(targetKey)) {
     throw new Error("OPTION_POOL_CONFLICT");
   }
@@ -467,19 +492,18 @@ function buildOptionsFromVocabPool(
   return optionWords.map((word, idx) => `(${letters[idx]}) ${word}`);
 }
 
-function buildProgrammaticExplanation(q: any, targetWord: any, options: string[]): string {
+// ── UPDATED: use AI-generated explanation from the stem call ──
+function buildFallbackExplanation(targetWord: any, options: string[]): string {
   const correctWord = String(targetWord.word || "").trim();
-  const meaning = String(targetWord.meaning || "").trim() || "題目指定的中文意思";
   const distractors = options
     .map(optionWord)
     .filter((word) => word.toLowerCase() !== correctWord.toLowerCase());
 
-  return `正解為 ${correctWord}，意思是「${meaning}」。本句的空格需要符合「${meaning}」這個語意，且與句中的上下文、搭配與邏輯關係最自然。${distrorsText(distractors)}雖然都是指定字彙表中的選項，但不符合本句所需的語意或自然搭配，因此不是最佳答案。`;
-}
+  const distractorText = distractors.length > 0
+    ? `其他選項 ${distractors.join("、")} 不符合本句語意或自然搭配，因此不是最佳答案。`
+    : "其他選項不符合本句語意或自然搭配，因此不是最佳答案。";
 
-function distrorsText(distractors: string[]): string {
-  if (distractors.length === 0) return "其他選項";
-  return `其他選項 ${distractors.join("、")}`;
+  return `正解為 ${correctWord}。${distractorText}`;
 }
 
 function assembleVocabQuestions(
@@ -512,13 +536,18 @@ function assembleVocabQuestions(
         usedOptionWords,
         targetWordKeys
       );
+
+      // Use AI-generated explanation if present and non-empty; fall back to template
+      const aiExplanation = String(raw.explanation || "").trim();
+      const explanation = aiExplanation || buildFallbackExplanation(targetWord, options);
+
       return {
         id: `v${idx + 1}`,
         question: String(raw.question || "").trim(),
         options,
         correctAnswer: answerKey[idx],
         wordTested: targetWord.word,
-        explanation: buildProgrammaticExplanation(raw, targetWord, options)
+        explanation
       };
     })
   };
@@ -614,8 +643,6 @@ async function validateVocabSuite(
     );
   }
 
-  // Cost-saving: skip the second AI reviewer call in production by default.
-  // Enable only when debugging item quality: ENABLE_AI_REVIEWER=true
   if (process.env.ENABLE_AI_REVIEWER === "true") {
     const uniqueness = await validateUniquenessBatch(checkedQuestions);
     if (Array.isArray(uniqueness?.results)) {
@@ -630,6 +657,7 @@ async function validateVocabSuite(
   return issues;
 }
 
+// ── UPDATED: now requests explanation from AI in the same call ──
 function buildVocabPrompt(targetWords: any[], previousIssues: string[] = []) {
   const targetList = buildTargetWordList(targetWords);
 
@@ -639,22 +667,26 @@ ${previousIssues.slice(0, 8).map((x, i) => `${i + 1}. ${x}`).join("\n")}
 `
     : "";
 
-  const system = `You write Taiwan GSAT-style English vocabulary question stems. Return compact JSON only.`;
+  const system = `You write Taiwan GSAT-style English vocabulary question stems for high school students. Return compact JSON only.`;
 
-  const user = `${correctionBlock}Generate exactly ${targetWords.length} vocabulary question stems only.
+  const user = `${correctionBlock}Generate exactly ${targetWords.length} vocabulary fill-in-the-blank questions.
 
-Server handles options and answer letters. Do not write options, A/B/C/D, or explanations.
+For each target word:
+1. Write one natural GSAT-level English sentence with exactly one blank: ______
+   - The blank must grammatically require the target POS and semantically fit the meaning.
+   - Do NOT include the target word or obvious inflected/derived forms in the sentence.
+   - Provide enough context clues so the target word is the only natural completion.
+2. Write one "explanation" in Traditional Chinese (繁體中文): one concise sentence explaining
+   why this blank specifically calls for this word, referencing the sentence context.
+   Do NOT reveal the answer word in the explanation.
 
-For each target word, write one natural GSAT-level sentence with exactly one blank: ______
-The blank must grammatically require the target POS and semantically fit the Chinese meaning.
-Do not include the target word or its obvious inflected/derived forms in the sentence.
-Use enough context so the target word is the natural completion.
+Note: Options and answer letters are handled by the server — do NOT include them.
 
 Targets:
 ${targetList}
 
 Return JSON only:
-{"vocabQuestions":[{"id":"v1","question":"... ______ ...","wordTested":"..."}]}`;
+{"vocabQuestions":[{"id":"v1","question":"... ______ ...","wordTested":"...","explanation":"（繁體中文說明）"}]}`;
 
   return { system, user };
 }
@@ -726,9 +758,10 @@ app.post("/api/generate-vocab", async (req, res) => {
             properties: {
               id: { type: Type.STRING },
               question: { type: Type.STRING },
-              wordTested: { type: Type.STRING }
+              wordTested: { type: Type.STRING },
+              explanation: { type: Type.STRING }
             },
-            required: ["id", "question", "wordTested"]
+            required: ["id", "question", "wordTested", "explanation"]
           }
         }
       },
@@ -760,7 +793,7 @@ app.post("/api/generate-vocab", async (req, res) => {
 
     if (data?.vocabQuestions?.length > 0) {
       data.vocabQuestions[0]._warning =
-        "AI 出題提醒：題幹由 AI 產生；選項與答案位置已由系統從指定字彙表與完整單字庫自動產生，10 題內選項不重複。正式使用前仍建議人工檢查。 / AI-generated stems; options and answer positions are generated programmatically from the selected vocabulary list and full word bank with no repeated options within the 10-question set.";
+        "AI 出題提醒：題幹與解析由 AI 產生；選項與答案位置已由系統從指定字彙表與完整單字庫自動產生，10 題內選項不重複。正式使用前仍建議人工檢查。 / AI-generated stems and explanations; options and answer positions are generated programmatically from the selected vocabulary list and full word bank with no repeated options within the 10-question set.";
     }
 
     res.json({
@@ -776,7 +809,7 @@ app.post("/api/generate-vocab", async (req, res) => {
   }
 });
 
-// Old endpoints intentionally disabled because the current app supports only vocab + reading.
+// Old endpoints intentionally disabled
 app.post("/api/generate-cloze", async (_req, res) => {
   res.status(410).json({
     success: false,
