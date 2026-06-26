@@ -145,10 +145,14 @@ app.post("/api/generate", async (req, res) => {
 Your tone is encouraging, academically precise, and deeply knowledgeable about Taiwan's testing patterns.
 You will generate high-quality interactive exercises based on the vocabulary words provided.
 Ensure that:
-1. Every generated question has no ambiguity. There is exactly one correct answer.
-2. The vocabulary level fits the Taiwan GSAT syllabus (levels 3 to 6).
-3. The explanations are written in elegant Traditional Chinese (繁體中文) following the Taiwanese teaching style, with rich analyses of grammar, vocabulary collocations, and translation.
-4. Correct answers are balanced among choices (A, B, C, D) without clustering.`;
+1. Every generated question and option is 100% grammatically and contextually correct.
+   - For vocabulary questions, ensure the blank can only be filled by the correct option, resulting in a natural, idiomatic, and grammatically perfect English sentence.
+   - Crucial grammar rule: Never use the verb "cost" in active voice with a person ("you", "I", "we", "he", etc.) as the subject to mean spending money (e.g., "you need to cost a lot of money" is completely ungrammatical; the correct verb is "spend"). "Cost" must take the item or activity as its subject (e.g., "the phone costs a lot of money").
+   - Carefully verify the syntax, grammar, and naturalness of all options and sentence frames.
+2. Every generated question has no ambiguity. There is exactly one correct answer.
+3. The vocabulary level fits the Taiwan GSAT syllabus (levels 3 to 6).
+4. The explanations are written in elegant Traditional Chinese (繁體中文) following the Taiwanese teaching style, with rich analyses of grammar, vocabulary collocations, and translation.
+5. Correct answers are balanced among choices (A, B, C, D) without clustering.`;
 
     const instructionsPrompt = `Please generate the requested GSAT exam exercises based on the following input vocabulary:
 ${vocabString}
