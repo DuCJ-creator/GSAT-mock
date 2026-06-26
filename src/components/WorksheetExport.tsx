@@ -14,7 +14,7 @@ interface WorksheetExportProps {
 
 export default function WorksheetExport({ suite, onBack }: WorksheetExportProps) {
   const [includeExplanations, setIncludeExplanations] = useState(true);
-  const [showOnlyAnswers, setShowOnlyAnswers] = useState(false);
+  const [previewMode, setPreviewMode] = useState<"full" | "questions" | "answers">("full");
   const [copied, setCopied] = useState(false);
 
   // Helper to generate the plain-text/markdown content for copying
@@ -172,35 +172,59 @@ export default function WorksheetExport({ suite, onBack }: WorksheetExportProps)
         </div>
 
         <div className="flex flex-wrap items-center gap-2 w-full md:w-auto justify-end">
+          {/* Segmented Control for Preview Mode */}
+          <div className="inline-flex bg-stone-200/80 p-1 rounded-xl border border-stone-300/40">
+            <button
+              onClick={() => setPreviewMode("full")}
+              className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition duration-200 ${
+                previewMode === "full"
+                  ? "bg-stone-800 text-white shadow-sm"
+                  : "text-stone-600 hover:text-stone-900 hover:bg-stone-100/50"
+              }`}
+              id="preview-mode-full-btn"
+            >
+              Full Exam Sheet
+            </button>
+            <button
+              onClick={() => setPreviewMode("questions")}
+              className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition duration-200 ${
+                previewMode === "questions"
+                  ? "bg-stone-800 text-white shadow-sm"
+                  : "text-stone-600 hover:text-stone-900 hover:bg-stone-100/50"
+              }`}
+              id="preview-mode-questions-btn"
+            >
+              Questions & Answer Sheet Only
+            </button>
+            <button
+              onClick={() => setPreviewMode("answers")}
+              className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition duration-200 ${
+                previewMode === "answers"
+                  ? "bg-amber-800 text-white shadow-sm"
+                  : "text-stone-600 hover:text-stone-900 hover:bg-stone-100/50"
+              }`}
+              id="preview-mode-answers-btn"
+            >
+              Answers & Key Only
+            </button>
+          </div>
+
           <button
             onClick={() => {
               setIncludeExplanations(!includeExplanations);
-              setShowOnlyAnswers(false);
             }}
+            disabled={previewMode === "questions"}
             className={`px-4 py-2 text-xs font-medium rounded-xl flex items-center gap-1.5 border transition duration-200 ${
-              includeExplanations 
-                ? "bg-stone-800 text-white border-stone-800" 
-                : "bg-white text-stone-600 border-stone-300 hover:bg-stone-50"
+              previewMode === "questions"
+                ? "bg-stone-100 text-stone-300 border-stone-200 cursor-not-allowed"
+                : includeExplanations 
+                  ? "bg-stone-800 text-white border-stone-800" 
+                  : "bg-white text-stone-600 border-stone-300 hover:bg-stone-50"
             }`}
             id="toggle-explanations-btn"
           >
             <CheckSquare className="w-4 h-4" />
             {includeExplanations ? "With Explanations" : "No Explanations"}
-          </button>
-
-          <button
-            onClick={() => {
-              setShowOnlyAnswers(!showOnlyAnswers);
-            }}
-            className={`px-4 py-2 text-xs font-medium rounded-xl flex items-center gap-1.5 border transition duration-200 ${
-              showOnlyAnswers 
-                ? "bg-amber-800 text-white border-amber-800"
-                : "bg-white text-stone-600 border-stone-300 hover:bg-stone-50"
-            }`}
-            id="toggle-answers-only-btn"
-          >
-            <Eye className="w-4 h-4" />
-            {showOnlyAnswers ? "Answers Only Preview" : "Full Exam Sheet"}
           </button>
 
           <button
@@ -242,33 +266,41 @@ export default function WorksheetExport({ suite, onBack }: WorksheetExportProps)
         <div className="border-b-2 border-stone-800 pb-6 mb-8 text-center relative">
           <div className="text-center">
             <h1 style={{ fontSize: "20px", fontWeight: "bold" }} className="text-stone-950 uppercase tracking-tight">
-              GSAT English Mock Paper Creator - English V/R Practice Worksheet
+              {previewMode === "answers" 
+                ? "GSAT English Mock Paper - OFFICIAL ANSWER KEY & SOLUTIONS" 
+                : "GSAT English Mock Paper Creator - English V/R Practice Worksheet"}
             </h1>
-            <p className="text-amber-800 font-semibold text-sm mt-1">學測英文模擬試卷 • Designed by Tr. Shirley Du</p>
+            <p className="text-amber-800 font-semibold text-sm mt-1">
+              {previewMode === "answers" 
+                ? "學測英文對照表與詳解 • Designed by Tr. Shirley Du" 
+                : "學測英文模擬試卷 • Designed by Tr. Shirley Du"}
+            </p>
             <p style={{ fontSize: "12px" }} className="italic text-stone-600 mt-1">GSAT Exam Preparation Suite — Traditional Chinese Detailed Solutions Included</p>
             <div className="flex justify-center items-center gap-4 text-xs font-mono text-stone-600 mt-3">
               <span>Standard: GSAT Levels 1-6</span>
             </div>
           </div>
 
-          <div className="mt-8 grid grid-cols-2 md:grid-cols-4 gap-4 border border-stone-300 p-3 rounded-lg text-xs bg-stone-50">
-            <div>
-              <span className="text-stone-500 font-semibold">Class (班級):</span> <span className="border-b border-stone-400 inline-block w-24 h-4"></span>
+          {previewMode !== "answers" && (
+            <div className="mt-8 grid grid-cols-2 md:grid-cols-4 gap-4 border border-stone-300 p-3 rounded-lg text-xs bg-stone-50">
+              <div>
+                <span className="text-stone-500 font-semibold">Class (班級):</span> <span className="border-b border-stone-400 inline-block w-24 h-4"></span>
+              </div>
+              <div>
+                <span className="text-stone-500 font-semibold">Name (姓名):</span> <span className="border-b border-stone-400 inline-block w-24 h-4"></span>
+              </div>
+              <div>
+                <span className="text-stone-500 font-semibold">Date (日期):</span> <span className="border-b border-stone-400 inline-block w-24 h-4"></span>
+              </div>
+              <div>
+                <span className="text-stone-500 font-bold text-amber-900">Score (得分):</span> <span className="border-b border-stone-400 inline-block w-16 h-4"></span>
+              </div>
             </div>
-            <div>
-              <span className="text-stone-500 font-semibold">Name (姓名):</span> <span className="border-b border-stone-400 inline-block w-24 h-4"></span>
-            </div>
-            <div>
-              <span className="text-stone-500 font-semibold">Date (日期):</span> <span className="border-b border-stone-400 inline-block w-24 h-4"></span>
-            </div>
-            <div>
-              <span className="text-stone-500 font-bold text-amber-900">Score (得分):</span> <span className="border-b border-stone-400 inline-block w-16 h-4"></span>
-            </div>
-          </div>
+          )}
         </div>
 
         {/* QUIZ SHEET CONTENT */}
-        {!showOnlyAnswers && (
+        {previewMode !== "answers" && (
           <div className="space-y-10">
             {/* Part I: Vocab */}
             {suite.vocabQuestions && suite.vocabQuestions.length > 0 && (
@@ -399,7 +431,7 @@ export default function WorksheetExport({ suite, onBack }: WorksheetExportProps)
         )}
 
         {/* STUDENT ANSWER SHEET (PAGE BREAK BEFORE) */}
-        {!showOnlyAnswers && (
+        {previewMode !== "answers" && (
           <div className="print-page-break mt-16 pt-8 border-t-2 border-stone-800" style={{ pageBreakBefore: "always" }}>
             <div className="text-center mb-6">
               <h2 style={{ fontSize: "16px", fontWeight: "bold" }} className="uppercase tracking-widest text-stone-950">GSAT English Mock Paper - STUDENT ANSWER SHEET</h2>
@@ -487,7 +519,8 @@ export default function WorksheetExport({ suite, onBack }: WorksheetExportProps)
         )}
 
         {/* PRINTABLE ANSWER KEY & SOLUTIONS SECTION */}
-        <div className="print-page-break mt-16 pt-8 border-t-2 border-double border-stone-800" style={{ pageBreakBefore: "always" }}>
+        {previewMode !== "questions" && (
+          <div className="print-page-break mt-16 pt-8 border-t-2 border-double border-stone-800" style={previewMode === "full" ? { pageBreakBefore: "always" } : undefined}>
           <div className="text-center mb-6">
             <h2 style={{ fontSize: "16px", fontWeight: "bold" }} className="uppercase tracking-widest text-stone-950">Official Answer Key Chart</h2>
             <p className="text-xs text-amber-900 italic font-serif">學測英語備考對照表 — 官方快速閱卷簡明答案卡</p>
@@ -702,7 +735,8 @@ export default function WorksheetExport({ suite, onBack }: WorksheetExportProps)
               </div>
             </div>
           )}
-        </div>
+          </div>
+        )}
 
         {/* Footer info for printed papers */}
         <div className="border-t border-stone-300 pt-4 mt-12 flex justify-between text-[10px] font-mono text-stone-500">
