@@ -422,7 +422,7 @@ export default function WorksheetExport({ suite, onBack }: WorksheetExportProps)
       const statusSpan = document.createElement('span');
       statusSpan.className = "font-mono text-[10px] bg-stone-100 px-1.5 py-0.5 rounded font-bold text-stone-500";
       statusSpan.id = \`nav-counter-\${targetId}\`;
-      statusSpan.innerText = \`\${getAnsweredCount()}/\text-stone-800 \${totalCount}\`;
+      statusSpan.innerText = \`\${getAnsweredCount()}/\${totalCount}\`;
       btn.appendChild(statusSpan);
 
       container.appendChild(btn);
@@ -535,7 +535,7 @@ export default function WorksheetExport({ suite, onBack }: WorksheetExportProps)
           
           let questionsHtml = '';
           p.questions.forEach((q, qIdx) => {
-            const compositeKey = \`\${pIdx}_\\qIdx\`;
+            const compositeKey = \`\${pIdx}_\${qIdx}\`;
             let choicesHtml = '';
             q.options.forEach((opt, optIdx) => {
               const letter = ["A", "B", "C", "D"][optIdx];
@@ -640,7 +640,7 @@ export default function WorksheetExport({ suite, onBack }: WorksheetExportProps)
         EXAM_DATA.blankMatchingSuite.options.forEach((opt, idx) => {
           optionTableHtml += \`
             <div class="bg-stone-50 border border-stone-200 p-2 rounded-lg shadow-sm text-center text-xs md:text-sm font-mono font-semibold text-stone-800">
-              \&nbsp;\text-stone-800 \${opt}
+              \${opt}
             </div>
           \`;
         });
@@ -857,7 +857,7 @@ export default function WorksheetExport({ suite, onBack }: WorksheetExportProps)
                 ? '<span class="text-green-700 font-bold flex items-center gap-1">✅ 正確 Correct!</span>' 
                 : \`<span class="text-red-700 font-bold flex items-center gap-1">❌ 錯誤 Incorrect • 正確答案是 (\${q.correctAnswer})</span>\`}
             </div>
-            <p class="text-xs text-stone-500 font-mono">Target Vocabulary: <strong class="text-stone-800">\text-stone-800 \${q.wordTested}</strong></p>
+            <p class="text-xs text-stone-500 font-mono">Target Vocabulary: <strong class="text-stone-800">\${q.wordTested}</strong></p>
             <p class="text-xs text-stone-700 mt-1.5 leading-relaxed font-sans"><strong class="text-stone-900">【詳解】</strong> \${q.explanation}</p>
           \`;
         });
