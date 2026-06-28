@@ -60,8 +60,6 @@ export default function App() {
   // Exercise checklist states
   const [selectedExerciseTypes, setSelectedExerciseTypes] = useState({
     vocab: true,
-    cloze: true,
-    blankMatching: true,
     reading: true
   });
   const [selectedReadingLevels, setSelectedReadingLevels] = useState<string[]>(["essential"]); // "basic", "essential", "advanced"
@@ -741,42 +739,6 @@ export default function App() {
                       />
                       <span className="text-xs font-bold text-stone-900 font-sans">
                         GSAT Vocabulary MCQs (10 Qs) / 詞彙單選題 (10 題)
-                      </span>
-                    </label>
-
-                    {/* 2. Cloze (綜合測驗) */}
-                    <label className={`border rounded-xl p-4 flex items-center gap-3 cursor-pointer transition ${
-                      selectedExerciseTypes.cloze 
-                        ? "border-teal-400 bg-teal-50/20" 
-                        : "border-stone-200 hover:border-stone-300 bg-white"
-                    }`}>
-                      <input
-                        type="checkbox"
-                        checked={selectedExerciseTypes.cloze}
-                        onChange={() => setSelectedExerciseTypes(prev => ({ ...prev, cloze: !prev.cloze }))}
-                        className="rounded border-stone-300 text-teal-700 focus:ring-teal-700 w-4 h-4 shrink-0"
-                        id="checkbox-cloze-test"
-                      />
-                      <span className="text-xs font-bold text-stone-900 font-sans">
-                        GSAT Cloze / Integrated Gaps (5 Qs) / 綜合測驗 - 克漏字 (5 格)
-                      </span>
-                    </label>
-
-                    {/* 3. Blank Matching */}
-                    <label className={`border rounded-xl p-4 flex items-center gap-3 cursor-pointer transition ${
-                      selectedExerciseTypes.blankMatching 
-                        ? "border-teal-400 bg-teal-50/20" 
-                        : "border-stone-200 hover:border-stone-300 bg-white"
-                    }`}>
-                      <input
-                        type="checkbox"
-                        checked={selectedExerciseTypes.blankMatching}
-                        onChange={() => setSelectedExerciseTypes(prev => ({ ...prev, blankMatching: !prev.blankMatching }))}
-                        className="rounded border-stone-300 text-teal-700 focus:ring-teal-700 w-4 h-4 shrink-0"
-                        id="checkbox-blank-matching"
-                      />
-                      <span className="text-xs font-bold text-stone-900 font-sans">
-                        GSAT Blank Matching (10 Gaps) / 文意選填 (10 格)
                       </span>
                     </label>
 
