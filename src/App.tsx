@@ -267,11 +267,25 @@ export default function App() {
       if (!response.ok) {
         let errorMsg = "";
         try {
-          const errorData = await response.json();
-          errorMsg = errorData.error;
+          const text = await response.text();
+          try {
+            const errorData = JSON.parse(text);
+            errorMsg = errorData.error || "";
+          } catch {
+            if (text.includes("Action required to load your app") || text.includes("security cookie")) {
+              errorMsg = "瀏覽器第三方 Cookie 遭到阻擋，請開啟瀏覽器 Cookie 存取權限，或點選右上角『在新分頁中開啟』本程式。";
+            } else {
+              errorMsg = text.slice(0, 300);
+            }
+          }
         } catch (e) {
-          errorMsg = `Status: ${response.status} ${response.statusText}`;
+          errorMsg = `狀態碼: ${response.status}`;
         }
+
+        if (response.status === 500 && (!errorMsg || errorMsg.includes("API Configuration Error") || errorMsg.includes("Status: 500") || errorMsg.includes("Internal Server Error"))) {
+          errorMsg = "API 金鑰未設定或已失效。請至左上角或右上角 Settings > Secrets 檢查是否設定了『GEMINI_API_KEY』並重新整理。";
+        }
+
         throw new Error(errorMsg || "大腦生成模組失敗，請稍後再試。");
       }
 
