@@ -62,7 +62,7 @@ export default function App() {
     vocab: true,
     reading: true
   });
-  const [selectedReadingLevels, setSelectedReadingLevels] = useState<string[]>(["essential"]); // "basic", "essential", "advanced"
+  const [selectedReadingLevels, setSelectedReadingLevels] = useState<string[]>(["basic", "essential", "advanced"]); // "basic", "essential", "advanced"
 
   // Generated Suite and Player states
   const [examSuite, setExamSuite] = useState<GeneratedExamSuite | null>(null);
@@ -314,8 +314,6 @@ export default function App() {
 
         // Set default active section
         if (suite.vocabQuestions && suite.vocabQuestions.length > 0) setCurrentSection("vocab");
-        else if (suite.clozeSuite) setCurrentSection("cloze");
-        else if (suite.blankMatchingSuite) setCurrentSection("matching");
         else if (suite.readingPassages) setCurrentSection("reading");
 
         setActiveTab("player");
@@ -363,46 +361,6 @@ export default function App() {
       summary.vocab.score = summary.vocab.total > 0 ? Math.round((summary.vocab.correct / summary.vocab.total) * 100) : 0;
     }
 
-    // 2. Cloze Audit
-    if (examSuite.clozeSuite) {
-      examSuite.clozeSuite.questions.forEach((q) => {
-        const userAns = session.answers.cloze[q.gapNumber] || "";
-        const isCorrect = userAns === q.correctAnswer;
-        if (isCorrect) summary.cloze.correct++;
-        summary.cloze.total++;
-
-        reportDetails.push({
-          section: "cloze",
-          questionNumberOrName: String(q.gapNumber),
-          isCorrect,
-          userAnswer: userAns,
-          correctAnswer: q.correctAnswer,
-          questionText: `綜合測驗第(${q.gapNumber})格 [題型: ${q.category}]`
-        });
-      });
-      summary.cloze.score = summary.cloze.total > 0 ? Math.round((summary.cloze.correct / summary.cloze.total) * 100) : 0;
-    }
-
-    // 3. Blank Matching Audit
-    if (examSuite.blankMatchingSuite) {
-      examSuite.blankMatchingSuite.answers.forEach((ans, idx) => {
-        const userAns = session.answers.blankMatching[idx] || "";
-        const isCorrect = userAns === ans;
-        if (isCorrect) summary.blankMatching.correct++;
-        summary.blankMatching.total++;
-
-        reportDetails.push({
-          section: "blankMatching",
-          questionNumberOrName: String(idx + 1),
-          isCorrect,
-          userAnswer: userAns,
-          correctAnswer: ans,
-          questionText: `文意選填第 (${idx + 1}) 答案格`
-        });
-      });
-      summary.blankMatching.score = summary.blankMatching.total > 0 ? Math.round((summary.blankMatching.correct / summary.blankMatching.total) * 100) : 0;
-    }
-
     // 4. Reading MCQ Audit
     if (examSuite.readingPassages) {
       examSuite.readingPassages.forEach((p, pIdx) => {
@@ -427,8 +385,8 @@ export default function App() {
     }
 
     // Form comprehensive final scorecard
-    const totalCorrect = summary.vocab.correct + summary.cloze.correct + summary.blankMatching.correct + summary.reading.correct;
-    const totalQuestions = summary.vocab.total + summary.cloze.total + summary.blankMatching.total + summary.reading.total;
+    const totalCorrect = summary.vocab.correct + summary.reading.correct;
+    const totalQuestions = summary.vocab.total + summary.reading.total;
     summary.comprehensive = {
       correct: totalCorrect,
       total: totalQuestions,
@@ -777,7 +735,7 @@ export default function App() {
                           id="checkbox-reading-comprehension"
                         />
                         <span className="text-xs font-bold text-stone-900 font-sans">
-                          GSAT Reading Comprehension (4 Qs) / 閱讀測驗 (4 題)
+                          GSAT Reading Comprehension (4 Qs per level) / 閱讀測驗 (每級 4 題)
                         </span>
                       </label>
 
@@ -987,36 +945,6 @@ export default function App() {
                   </button>
                 )}
 
-                {examSuite.clozeSuite && (
-                  <button
-                    onClick={() => setCurrentSection("cloze")}
-                    className={`px-3 py-2.5 rounded-xl text-xs font-bold flex items-center justify-between transition ${
-                      currentSection === "cloze" 
-                        ? "bg-teal-700 text-white font-display" 
-                        : "text-stone-600 hover:bg-stone-50"
-                    }`}
-                    id="section-nav-cloze"
-                  >
-                    <span>Part II: Cloze 綜合測驗</span>
-                    <span className="bg-black/10 text-[9px] px-2 py-0.5 rounded-full font-mono">5 Gaps</span>
-                  </button>
-                )}
-
-                {examSuite.blankMatchingSuite && (
-                  <button
-                    onClick={() => setCurrentSection("matching")}
-                    className={`px-3 py-2.5 rounded-xl text-xs font-bold flex items-center justify-between transition ${
-                      currentSection === "matching" 
-                        ? "bg-teal-700 text-white font-display" 
-                        : "text-stone-600 hover:bg-stone-50"
-                    }`}
-                    id="section-nav-matching"
-                  >
-                    <span>Part III: 文意選填 matching</span>
-                    <span className="bg-black/10 text-[9px] px-2 py-0.5 rounded-full font-mono">10 Gaps</span>
-                  </button>
-                )}
-
                 {examSuite.readingPassages && examSuite.readingPassages.length > 0 && (
                   <button
                     onClick={() => setCurrentSection("reading")}
@@ -1027,7 +955,7 @@ export default function App() {
                     }`}
                     id="section-nav-reading"
                   >
-                    <span>Part IV: Reading Comprehension 閱讀</span>
+                    <span>Part II: Reading 閱讀測驗</span>
                     <span className="bg-black/10 text-[9px] px-2 py-0.5 rounded-full font-mono">
                       {examSuite.readingPassages.length * 4} Qs
                     </span>
@@ -1108,152 +1036,12 @@ export default function App() {
                   </div>
                 )}
 
-                {/* 2. CLOZE (综合测验) */}
-                {currentSection === "cloze" && examSuite.clozeSuite && (
-                  <div className="space-y-6" id="player-cloze-section">
-                    <div className="border-b border-stone-100 pb-3">
-                      <h3 className="text-base font-bold font-display text-stone-900">
-                        Part II: Cloze Test (學測綜合測驗克漏字)
-                      </h3>
-                      <p className="text-xs text-stone-500 mt-0.5">評估段落字音語意與搭配詞結構，點擊底下的代碼選項格來答題。</p>
-                    </div>
-
-                    <div className="bg-stone-50 border border-stone-200 rounded-2xl p-5 md:p-6 text-base font-sans leading-loose text-stone-800 tracking-wide whitespace-pre-wrap">
-                      {examSuite.clozeSuite.passage}
-                    </div>
-
-                    <div className="space-y-6 mt-8">
-                      <span className="text-xs font-bold font-mono text-stone-400 uppercase tracking-widest block">Choose option choices:</span>
-                      {examSuite.clozeSuite.questions.map((q, idx) => {
-                        const userSel = session.answers.cloze[q.gapNumber] || "";
-                        return (
-                          <div key={idx} className="bg-white border border-stone-200 rounded-xl p-4 space-y-3">
-                            <span className="text-xs font-bold font-mono text-amber-850">Gaps ({q.gapNumber}) Selector</span>
-                            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-                              {["A", "B", "C", "D"].map((letter) => {
-                                const optString = q.options.find(o => o.startsWith(`(${letter})`)) || `(${letter})`;
-                                const isSelected = userSel === letter;
-                                return (
-                                  <button
-                                    key={letter}
-                                    type="button"
-                                    onClick={() => {
-                                      setSession(prev => ({
-                                        ...prev,
-                                        answers: {
-                                          ...prev.answers,
-                                          cloze: { ...prev.answers.cloze, [q.gapNumber]: letter }
-                                        }
-                                      }));
-                                    }}
-                                    className={`py-2 px-3 rounded-lg text-xs font-semibold text-center border transition ${
-                                      isSelected
-                                        ? "bg-teal-700 text-white border-teal-700"
-                                        : "bg-white text-stone-700 border-stone-300 hover:bg-stone-50"
-                                    }`}
-                                    id={`player-cloze-gap-${q.gapNumber}-opt-${letter}`}
-                                  >
-                                    {optString}
-                                  </button>
-                                );
-                              })}
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-                )}
-
-                {/* 3. BLANK MATCHING (文意選填) */}
-                {currentSection === "matching" && examSuite.blankMatchingSuite && (
-                  <div className="space-y-6" id="player-matching-section">
-                    <div className="border-b border-stone-100 pb-3">
-                      <h3 className="text-base font-bold font-display text-stone-900">
-                        Part III: Blank Matching (學測文意選填組)
-                      </h3>
-                      <p className="text-xs text-stone-500 mt-0.5">點擊下方考卷空白，為 10 個挖空格對應最適配單字 (A) ~ (J)。每個代碼僅限填選一次。</p>
-                    </div>
-
-                    {/* Candidate lists above passage */}
-                    <div className="bg-stone-100 border border-stone-200 rounded-xl p-4">
-                      <span className="text-xs font-mono font-bold uppercase text-stone-500 block mb-3 text-center">Available Options Table</span>
-                      <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 font-mono text-xs font-semibold">
-                        {examSuite.blankMatchingSuite.options.map((opt, idx) => {
-                          // Extract letter from "(A) beneficial" -> "A"
-                          const letter = opt.charAt(1);
-                          // Check if letter already utilized
-                          const isUsed = Object.values(session.answers.blankMatching).includes(letter);
-                          return (
-                            <div 
-                              key={idx} 
-                              className={`py-2 px-3 rounded-lg border text-center transition ${
-                                isUsed 
-                                  ? "bg-stone-200/50 text-stone-400 line-through border-stone-250 select-none" 
-                                  : "bg-white text-stone-800 border-stone-300 shadow-xs"
-                              }`}
-                            >
-                              {opt}
-                            </div>
-                          );
-                        })}
-                      </div>
-                    </div>
-
-                    {/* The passage */}
-                    <div className="bg-stone-50 border border-stone-200 rounded-2xl p-5 md:p-6 text-base font-sans leading-loose text-stone-800 tracking-wide whitespace-pre-wrap">
-                      {examSuite.blankMatchingSuite.passage}
-                    </div>
-
-                    {/* Selector Select controls array */}
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-8">
-                      {Array.from({ length: 10 }).map((_, idx) => {
-                        const gapNo = idx + 1;
-                        const userSel = session.answers.blankMatching[idx] || "";
-                        return (
-                          <div key={idx} className="bg-white border border-stone-200 rounded-xl p-4 flex justify-between items-center gap-3">
-                            <div>
-                              <span className="text-xs font-bold text-stone-900 font-display">Blank ({gapNo}) Matcher</span>
-                              <p className="text-[10px] text-stone-400 font-sans mt-0.5">Choose which candidates fit blank ({gapNo})</p>
-                            </div>
-                            <select
-                              value={userSel}
-                              onChange={(e) => {
-                                const val = e.target.value;
-                                setSession(prev => ({
-                                  ...prev,
-                                  answers: {
-                                    ...prev.answers,
-                                    blankMatching: { ...prev.answers.blankMatching, [idx]: val }
-                                  }
-                                }));
-                              }}
-                              className="bg-white border border-stone-300 rounded-lg py-1 px-3 text-xs focus:outline-none focus:ring-1 focus:ring-teal-700"
-                              id={`player-matching-gap-${gapNo}`}
-                            >
-                              <option value="">-- Choose Option --</option>
-                              {["A", "B", "C", "D", "E", "F", "G", "H", "I", "J"].map((letter) => {
-                                const fullOptStr = examSuite.blankMatchingSuite!.options.find(o => o.startsWith(`(${letter})`)) || `(${letter})`;
-                                return (
-                                  <option key={letter} value={letter}>
-                                    {fullOptStr}
-                                  </option>
-                                );
-                              })}
-                            </select>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-                )}
-
-                {/* 4. LEVELED READING COMPREHENSION */}
+                {/* 2. LEVELED READING COMPREHENSION */}
                 {currentSection === "reading" && examSuite.readingPassages && (
                   <div className="space-y-8" id="player-reading-section">
                     <div className="border-b border-stone-100 pb-3">
                       <h3 className="text-base font-bold font-display text-stone-900">
-                        Part IV: Reading Comprehension (學測分級閱讀測驗)
+                        Part II: Reading Comprehension (學測分級閱讀測驗)
                       </h3>
                       <p className="text-xs text-stone-500 mt-0.5">挑戰精選學測難點，請仔細閱讀文章後作答 4 題多類別單題設計。</p>
                     </div>
