@@ -3,13 +3,29 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect } from "react";
-import {
-  Sparkles, GraduationCap, Layers, Settings, CheckCircle, Award,
-  History, RefreshCw, AlertCircle, Printer, ArrowRight
+import React, { useState, useEffect, useRef } from "react";
+import { 
+  Plus, 
+  Trash2, 
+  Sparkles, 
+  BookOpen, 
+  GraduationCap, 
+  Layers, 
+  Settings, 
+  CheckCircle, 
+  Award, 
+  Clock, 
+  History, 
+  RefreshCw, 
+  AlertCircle, 
+  Printer, 
+  ArrowRight, 
+  ListOrdered,
+  HelpCircle,
+  X,
+  FileText
 } from "lucide-react";
 import { fetchAndParseCSV, padVocabularyIfNecessary } from "./utils/csvFetcher";
-import { normalizeOptions, normalizeAnswer } from "./utils/helpers";
 import { VocabWord, GeneratedExamSuite, PracticeSessionState, ProgressReport } from "./types";
 import WorksheetExport from "./components/WorksheetExport";
 import ProgressReportView from "./components/ProgressReportView";
@@ -17,15 +33,16 @@ import ProgressReportView from "./components/ProgressReportView";
 const REASSURING_MESSAGES = [
   "正在剖析大數據：挑選最適合學測程度的精選搭配詞...",
   "杜老師正在為你研擬高擬真的學測字彙單選題...",
-  "正在確保每道題目語意精準、答案無歧義...",
+  "正在架構『綜合測驗』克漏字：融入文法、介系詞、轉折詞巧思...",
+  "正在撰寫『文意選填』：配置 10 組極具欺騙性的高級字彙選項...",
   "正在為你編寫多層次閱讀測驗：基本、精實、進階...",
   "正在由杜老師審對答案及 Traditional Chinese 專業詳解中..."
 ];
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<"lobby" | "player" | "worksheet" | "report">("lobby");
-  const [showSubmitConfirm, setShowSubmitConfirm] = useState(false);
-
+  
+  // Custom Vocab mode state ("system" or "self")
   const [vocabSource, setVocabSource] = useState<"system" | "self-input">("system");
   const [selectedLevel, setSelectedLevel] = useState<number>(4);
   const [availableWords, setAvailableWords] = useState<VocabWord[]>([]);
@@ -33,31 +50,42 @@ export default function App() {
   const [selectedUnits, setSelectedUnits] = useState<string[]>([]);
   const [unitSearch, setUnitSearch] = useState<string>("");
   const [unitsDropdownOpen, setUnitsDropdownOpen] = useState<boolean>(false);
+  const [randomWordCount, setRandomWordCount] = useState<number>(20);
 
+  // Self-input states
   const [selfInputText, setSelfInputText] = useState<string>(
     "accommodate v.\nvital adj.\nsystem n.\nalleviate v.\ncomprehensive adj.\ncoincide v.\ndevastate v.\nexaggerate v.\npersistent adj.\nversatile adj."
   );
+  const [selfInputError, setSelfInputError] = useState<string | null>(null);
 
+  // Exercise checklist states
   const [selectedExerciseTypes, setSelectedExerciseTypes] = useState({
-    vocab: true, reading: true
+    vocab: true,
+    cloze: true,
+    blankMatching: true,
+    reading: true
   });
-  const [selectedReadingLevels, setSelectedReadingLevels] = useState<string[]>(["essential"]);
+  const [selectedReadingLevels, setSelectedReadingLevels] = useState<string[]>(["essential"]); // "basic", "essential", "advanced"
 
+  // Generated Suite and Player states
   const [examSuite, setExamSuite] = useState<GeneratedExamSuite | null>(null);
   const [generationLoading, setGenerationLoading] = useState<boolean>(false);
   const [loadingStepMsg, setLoadingStepMsg] = useState<string>("");
   const [generationError, setGenerationError] = useState<string | null>(null);
 
+  // Playback timer & interactive answers
   const [session, setSession] = useState<PracticeSessionState>({
-    answers: { vocab: {}, reading: {} },
+    answers: { vocab: {}, cloze: {}, blankMatching: {}, reading: {} },
     submitted: false,
     startTime: 0
   });
-  const [currentSection, setCurrentSection] = useState<"vocab" | "reading">("vocab");
+  const [currentSection, setCurrentSection] = useState<"vocab" | "cloze" | "matching" | "reading">("vocab");
 
+  // Study History
   const [studyHistory, setStudyHistory] = useState<ProgressReport[]>([]);
   const [activeReport, setActiveReport] = useState<ProgressReport | null>(null);
 
+  // Reassuring animated interval during API loads
   useEffect(() => {
     let interval: NodeJS.Timeout;
     if (generationLoading) {
@@ -71,15 +99,23 @@ export default function App() {
     return () => clearInterval(interval);
   }, [generationLoading]);
 
+  // Load CSV words on system-level changes
   useEffect(() => {
-    if (vocabSource === "system") loadSystemWords(selectedLevel);
+    if (vocabSource === "system") {
+      loadSystemWords(selectedLevel);
+    }
   }, [selectedLevel, vocabSource]);
 
+  // Load history from localStorage on startup
   useEffect(() => {
     try {
       const saved = localStorage.getItem("gsat_buffet_history");
-      if (saved) setStudyHistory(JSON.parse(saved));
-    } catch (e) { console.error(e); }
+      if (saved) {
+        setStudyHistory(JSON.parse(saved));
+      }
+    } catch (e) {
+      console.error("Error reading storage", e);
+    }
   }, []);
 
   const loadSystemWords = async (level: number) => {
@@ -87,54 +123,88 @@ export default function App() {
     try {
       const words = await fetchAndParseCSV(level);
       setAvailableWords(words);
-      const uniqueUnits = Array.from(new Set<string>(words.map(w => w.unit)))
-        .sort((a, b) => parseInt(a) - parseInt(b));
+      // Auto-select first 3 unique units initially to make it easy for students
+      const uniqueUnits = Array.from(new Set<string>(words.map(w => w.unit))).sort((a: string, b: string) => parseInt(a) - parseInt(b));
       setSelectedUnits(uniqueUnits.slice(0, 3));
-    } catch (err) { console.error(err); }
-    finally { setLoadingCSV(false); }
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setLoadingCSV(false);
+    }
   };
 
+  // Helper to parse self-input lists line-by-line (one line per word, POS is optional, meaning is optional)
   const parseSelfInputList = (): { word: string; pos?: string; meaning?: string }[] => {
     const list: { word: string; pos?: string; meaning?: string }[] = [];
-    for (const line of selfInputText.split("\n")) {
+    const lines = selfInputText.split("\n");
+
+    for (const line of lines) {
       const cleanLine = line.trim();
       if (!cleanLine) continue;
-      const posRegex = /\b(v|adj|n|adv|prep|pron|conj|v\.|adj\.|n\.|adv\.|prep\.|pron\.|conj\.)\b/i;
+
+      // Match common POS symbols like v., adj., n., adv., prep., etc. with or without dots or parens
+      const posRegex = /\b(v|adj|n|adv|prep|pron|conj|v\.|adj\.|n\.|adv\.|prep\.|pron\.|conj\.)\b|(?:\((v|adj|n|adv|prep|pron|conj|v\.|adj\.|n\.|adv\.|prep\.|pron\.|conj\.)\))/i;
       const matchPos = cleanLine.match(posRegex);
-      let pos: string | undefined;
+      
+      let pos = undefined;
+      if (matchPos) {
+        pos = (matchPos[1] || matchPos[2] || "").trim().toLowerCase();
+        if (pos.endsWith(".")) {
+          pos = pos.slice(0, -1);
+        }
+      }
+
       let word = "";
       let remaining = "";
-      if (matchPos && matchPos.index !== undefined) {
-        pos = matchPos[1].replace(".", "").toLowerCase();
-        word = cleanLine.substring(0, matchPos.index).trim();
-        remaining = cleanLine.substring(matchPos.index + matchPos[0].length).trim();
-      } else {
-        const tokens = cleanLine.split(/\s+/);
-        const englishTokens = tokens.filter(t => /^[a-zA-Z\s-]+$/.test(t));
-        word = englishTokens.join(" ").trim();
-        remaining = "";
-      }
-      word = word.replace(/^[^a-zA-Z]+|[^a-zA-Z\s-]+$/g, "").trim();
-      const meaning = remaining.replace(/^[-:\s~;]+/g, "").trim();
-      if (word) list.push({ word, pos, meaning: meaning || undefined });
-    }
-    return list;
-  };
 
-  // Calls a single section endpoint and returns its data
-  const fetchSection = async (endpoint: string, body: object): Promise<any> => {
-    const response = await fetch(endpoint, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
-    if (!response.ok) {
-      const err = await response.json().catch(() => ({}));
-      throw new Error(err.error || `${endpoint} failed`);
+      if (matchPos && matchPos.index !== undefined) {
+        const index = matchPos.index;
+        const posText = matchPos[0];
+        word = cleanLine.substring(0, index).trim();
+        remaining = cleanLine.substring(index + posText.length).trim();
+      } else {
+        const delimMatch = cleanLine.match(/[-:]/);
+        if (delimMatch && delimMatch.index !== undefined) {
+          word = cleanLine.substring(0, delimMatch.index).trim();
+          remaining = cleanLine.substring(delimMatch.index + 1).trim();
+        } else {
+          // Check if first token or consecutive english tokens represent the word
+          const tokens = cleanLine.split(/\s+/);
+          let englishTokens: string[] = [];
+          let otherTokens: string[] = [];
+          let foundCh = false;
+          for (const token of tokens) {
+            if (foundCh) {
+              otherTokens.push(token);
+            } else if (/^[a-zA-Z\s-]+$/.test(token)) {
+              englishTokens.push(token);
+            } else {
+              foundCh = true;
+              otherTokens.push(token);
+            }
+          }
+          if (englishTokens.length > 0) {
+            word = englishTokens.join(" ").trim();
+            remaining = otherTokens.join(" ").trim();
+          } else {
+            word = cleanLine.replace(/[^a-zA-Z\s-]/g, "").trim();
+          }
+        }
+      }
+
+      word = word.replace(/^[^a-zA-Z]+|[^a-zA-Z\s-]+$/g, "").trim();
+      let meaning = remaining.replace(/^[-:\s~;]+/g, "").trim();
+
+      if (word && word.length > 0) {
+        list.push({
+          word,
+          pos: pos || undefined,
+          meaning: meaning || undefined
+        });
+      }
     }
-    const res = await response.json();
-    if (!res.success) throw new Error(res.error || `${endpoint} returned failure`);
-    return res.data;
+
+    return list;
   };
 
   const handleGenerateExam = async () => {
@@ -142,398 +212,737 @@ export default function App() {
     setGenerationLoading(true);
 
     try {
-      let finalVocabList: { word: string; pos?: string; meaning?: string; level?: number; unit?: string }[] = [];
+      let finalVocabList: { word: string; pos?: string; meaning?: string }[] = [];
       let sourceCount = 0;
 
       if (vocabSource === "system") {
+        // Filter elements based on selected units
         let filteredWords = availableWords;
         if (selectedUnits.length > 0) {
           filteredWords = availableWords.filter(w => selectedUnits.includes(w.unit));
         }
+
+        // Shuffle and pick
         const shuffled = [...filteredWords].sort(() => 0.5 - Math.random());
-        finalVocabList = shuffled.map(w => ({
-          word: w.word, pos: w.pos, meaning: w.meaning,
-          level: selectedLevel, unit: w.unit
+        const selectedSystemSubset = shuffled.slice(0, randomWordCount);
+
+        finalVocabList = selectedSystemSubset.map(w => ({
+          word: w.word,
+          pos: w.pos,
+          meaning: w.meaning
         }));
         sourceCount = finalVocabList.length;
       } else {
+        // self-input
         const list = parseSelfInputList();
-        if (list.length === 0) throw new Error("請先在自主輸入區塊輸入單字列表喔！");
-        const padded = list.length < 12 ? await padVocabularyIfNecessary(list, selectedLevel, 12) : list;
-        finalVocabList = padded.map(w => ({ ...w, level: selectedLevel }));
+        if (list.length === 0) {
+          throw new Error("請先在自主輸入區塊輸入單字列表喔！");
+        }
+        
+        // Pad with system words if list is less than 12
+        if (list.length < 12) {
+          const padded = await padVocabularyIfNecessary(list, selectedLevel, 12);
+          finalVocabList = padded;
+        } else {
+          finalVocabList = list;
+        }
         sourceCount = list.length;
       }
 
-      if (finalVocabList.length === 0) throw new Error("找不到可用的單字，請重選字表級別或檢查輸入。");
-      if (!Object.values(selectedExerciseTypes).some(v => v)) throw new Error("請至少勾選一種題型！");
-
-      // Fire all selected sections in parallel
-      const promises: Promise<any>[] = [];
-      const sectionKeys: string[] = [];
-
-      if (selectedExerciseTypes.vocab) {
-        promises.push(fetchSection("/api/generate-vocab", { vocabList: finalVocabList }));
-        sectionKeys.push("vocab");
+      if (finalVocabList.length === 0) {
+        throw new Error("找不到可用的單字。請嘗試重選字表級別或檢查輸入。");
       }
 
-      if (selectedExerciseTypes.reading) {
-        promises.push(fetchSection("/api/generate-reading", {
+      // Keep user checklist validated: must select at least one exercise type
+      const hasAnySelected = Object.values(selectedExerciseTypes).some(v => v === true);
+      if (!hasAnySelected) {
+        throw new Error("請至少勾選一種想練習或列印的學測大題型！");
+      }
+
+      // API Call
+      const response = await fetch("/api/generate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
           vocabList: finalVocabList,
-          selectedReadingLevels: selectedReadingLevels.length > 0 ? selectedReadingLevels : ["essential"]
-        }));
-        sectionKeys.push("reading");
+          selectedExerciseTypes,
+          selectedReadingLevels: selectedExerciseTypes.reading ? selectedReadingLevels : [],
+          selectedLevel,
+        }),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.error || "大腦生成模組失敗，請稍後再試。");
       }
 
-      const results = await Promise.all(promises);
+      const resData = await response.json();
+      if (resData.success && resData.data) {
+        const suite: GeneratedExamSuite = {
+          ...resData.data,
+          timestamp: Date.now(),
+          metadata: {
+            vocabCount: sourceCount,
+            sourceType: vocabSource,
+            selectedLevel,
+            selectedUnits: vocabSource === "system" ? selectedUnits : ["Self Input"]
+          }
+        };
+        
+        setExamSuite(suite);
+        
+        // Dynamic navigation routing
+        // Open appropriate default tab
+        setSession({
+          answers: { vocab: {}, cloze: {}, blankMatching: {}, reading: {} },
+          submitted: false,
+          startTime: Date.now()
+        });
 
-      // Merge results into one suite
-      const merged: any = {};
-      sectionKeys.forEach((key, i) => {
-        Object.assign(merged, results[i]);
-      });
+        // Set default active section
+        if (suite.vocabQuestions && suite.vocabQuestions.length > 0) setCurrentSection("vocab");
+        else if (suite.clozeSuite) setCurrentSection("cloze");
+        else if (suite.blankMatchingSuite) setCurrentSection("matching");
+        else if (suite.readingPassages) setCurrentSection("reading");
 
-      const suite: GeneratedExamSuite = {
-        ...merged,
-        timestamp: Date.now(),
-        metadata: {
-          vocabCount: sourceCount,
-          sourceType: vocabSource,
-          selectedLevel,
-          selectedUnits: vocabSource === "system" ? selectedUnits : ["Self Input"],
-          vocabList: finalVocabList
-        }
-      };
-
-      setExamSuite(suite);
-      setSession({
-        answers: { vocab: {}, reading: {} },
-        submitted: false,
-        startTime: Date.now()
-      });
-
-      if (suite.vocabQuestions?.length > 0) setCurrentSection("vocab");
-      else if (suite.readingPassages?.length > 0) setCurrentSection("reading");
-
-      setActiveTab("player");
+        setActiveTab("player");
+      } else {
+        throw new Error("生卷系統響應異常，請重試一遍。");
+      }
     } catch (err: any) {
       console.error(err);
-      setGenerationError(err.message || "生卷失敗，請稍後再試。");
+      setGenerationError(err.message || "生卷失敗，請檢查網路連線或稍等後再試。");
     } finally {
       setGenerationLoading(false);
     }
   };
 
-  const handleInteractiveSubmitAnswers = () => {
-    setShowSubmitConfirm(true);
-  };
-
-  const handleConfirmedSubmit = () => {
-    setShowSubmitConfirm(false);
+  const handleInteractiveSubmitAnswers = async () => {
     if (!examSuite) return;
 
+    // Evaluate answers
     const reportDetails: any[] = [];
     const summary = {
       vocab: { correct: 0, total: 0, score: 0 },
+      cloze: { correct: 0, total: 0, score: 0 },
+      blankMatching: { correct: 0, total: 0, score: 0 },
       reading: { correct: 0, total: 0, score: 0 },
       comprehensive: { correct: 0, total: 0, score: 0 }
     };
 
-    // Vocab — use index-based keys
+    // 1. Vocab MCQ Audit
     if (examSuite.vocabQuestions) {
-      examSuite.vocabQuestions.forEach((q, qIndex) => {
-        const userAns = session.answers.vocab[`vocab_${qIndex}`] || "";
-        const correctAns = normalizeAnswer(q.correctAnswer);
-        const isCorrect = userAns === correctAns;
+      examSuite.vocabQuestions.forEach((q) => {
+        const userAns = session.answers.vocab[q.id] || "";
+        const isCorrect = userAns === q.correctAnswer;
         if (isCorrect) summary.vocab.correct++;
         summary.vocab.total++;
+
         reportDetails.push({
-          section: "vocab", questionNumberOrName: `vocab_${qIndex}`,
-          isCorrect, userAnswer: userAns, correctAnswer: correctAns,
-          questionText: q.question,
-          wordTested: q.wordTested,
-          wordMeta: examSuite.metadata?.vocabList?.find((v: any) => v.word === q.wordTested)
+          section: "vocab",
+          questionNumberOrName: q.id,
+          isCorrect,
+          userAnswer: userAns,
+          correctAnswer: q.correctAnswer,
+          questionText: q.question
         });
       });
       summary.vocab.score = summary.vocab.total > 0 ? Math.round((summary.vocab.correct / summary.vocab.total) * 100) : 0;
     }
 
-    // Reading
+    // 2. Cloze Audit
+    if (examSuite.clozeSuite) {
+      examSuite.clozeSuite.questions.forEach((q) => {
+        const userAns = session.answers.cloze[q.gapNumber] || "";
+        const isCorrect = userAns === q.correctAnswer;
+        if (isCorrect) summary.cloze.correct++;
+        summary.cloze.total++;
+
+        reportDetails.push({
+          section: "cloze",
+          questionNumberOrName: String(q.gapNumber),
+          isCorrect,
+          userAnswer: userAns,
+          correctAnswer: q.correctAnswer,
+          questionText: `綜合測驗第(${q.gapNumber})格 [題型: ${q.category}]`
+        });
+      });
+      summary.cloze.score = summary.cloze.total > 0 ? Math.round((summary.cloze.correct / summary.cloze.total) * 100) : 0;
+    }
+
+    // 3. Blank Matching Audit
+    if (examSuite.blankMatchingSuite) {
+      examSuite.blankMatchingSuite.answers.forEach((ans, idx) => {
+        const userAns = session.answers.blankMatching[idx] || "";
+        const isCorrect = userAns === ans;
+        if (isCorrect) summary.blankMatching.correct++;
+        summary.blankMatching.total++;
+
+        reportDetails.push({
+          section: "blankMatching",
+          questionNumberOrName: String(idx + 1),
+          isCorrect,
+          userAnswer: userAns,
+          correctAnswer: ans,
+          questionText: `文意選填第 (${idx + 1}) 答案格`
+        });
+      });
+      summary.blankMatching.score = summary.blankMatching.total > 0 ? Math.round((summary.blankMatching.correct / summary.blankMatching.total) * 100) : 0;
+    }
+
+    // 4. Reading MCQ Audit
     if (examSuite.readingPassages) {
       examSuite.readingPassages.forEach((p, pIdx) => {
         p.questions.forEach((q, qIdx) => {
-          const userKey = `${pIdx}_${qIdx}`;
+          const userKey = `${pIdx}-${qIdx}`;
           const userAns = session.answers.reading[userKey] || "";
-          const correctAns = normalizeAnswer(q.correctAnswer);
-          const isCorrect = userAns === correctAns;
+          const isCorrect = userAns === q.correctAnswer;
           if (isCorrect) summary.reading.correct++;
           summary.reading.total++;
+
           reportDetails.push({
-            section: "reading", questionNumberOrName: userKey,
-            isCorrect, userAnswer: userAns, correctAnswer: correctAns,
-            questionText: `[${p.title}] ${q.question}`
+            section: "reading",
+            questionNumberOrName: `P${pIdx + 1}-Q${qIdx + 1}`,
+            isCorrect,
+            userAnswer: userAns,
+            correctAnswer: q.correctAnswer,
+            questionText: `[Passage: ${p.title}] ${q.question}`
           });
         });
       });
       summary.reading.score = summary.reading.total > 0 ? Math.round((summary.reading.correct / summary.reading.total) * 100) : 0;
     }
 
-    const totalCorrect = summary.vocab.correct + summary.reading.correct;
-    const totalQuestions = summary.vocab.total + summary.reading.total;
+    // Form comprehensive final scorecard
+    const totalCorrect = summary.vocab.correct + summary.cloze.correct + summary.blankMatching.correct + summary.reading.correct;
+    const totalQuestions = summary.vocab.total + summary.cloze.total + summary.blankMatching.total + summary.reading.total;
     summary.comprehensive = {
-      correct: totalCorrect, total: totalQuestions,
+      correct: totalCorrect,
+      total: totalQuestions,
       score: totalQuestions > 0 ? Math.round((totalCorrect / totalQuestions) * 100) : 0
     };
+
+    const duration = Date.now() - session.startTime;
 
     const report: ProgressReport = {
       sessionId: `session-${Date.now()}`,
       timestamp: Date.now(),
-      durationMs: Date.now() - session.startTime,
+      durationMs: duration,
       scoreSummary: summary,
       details: reportDetails,
-      expertFeedback: "杜老師正在奮力評語中...",
-      selectedLevel
+      expertFeedback: "杜老師正在奮力評語中..."
     };
 
     setActiveReport(report);
-    const updatedHistory = [report, ...studyHistory].slice(0, 50);
-    setStudyHistory(updatedHistory);
-    try { localStorage.setItem("gsat_buffet_history", JSON.stringify(updatedHistory)); } catch (e) { console.error(e); }
 
-    setSession(prev => ({ ...prev, submitted: true }));
+    // Save and cache to past history
+    const updatedHistory = [report, ...studyHistory].slice(0, 50); // limit 50 logs safely
+    setStudyHistory(updatedHistory);
+    try {
+      localStorage.setItem("gsat_buffet_history", JSON.stringify(updatedHistory));
+    } catch (e) {
+      console.error(e);
+    }
+
+    // Set interactive view state as submitted
+    setSession(prev => ({
+      ...prev,
+      submitted: true,
+      endTime: Date.now()
+    }));
+
     setActiveTab("report");
   };
 
   const handleClearHistory = () => {
-    if (confirm("確定要清除所有備考研究紀錄嗎？")) {
+    if (confirm("確定要清除所有備考研究紀錄與學習成績嗎？")) {
       setStudyHistory([]);
       localStorage.removeItem("gsat_buffet_history");
     }
   };
 
+  // Extract list of unique units from available words (system mode)
   const uniqueUnits = Array.from(new Set<string>(availableWords.map(w => w.unit)))
-    .sort((a, b) => parseInt(a) - parseInt(b));
-  const filteredUnits = uniqueUnits.filter(u => u.toLowerCase().includes(unitSearch.toLowerCase()));
+    .sort((a: string, b: string) => parseInt(a) - parseInt(b));
+
+  const filteredUnits = uniqueUnits.filter((u: string) => 
+    u.toLowerCase().includes(unitSearch.toLowerCase())
+  );
 
   return (
     <div className="min-h-screen flex flex-col font-sans bg-[#FBFBFA]">
-      {/* Header */}
-      <header className="no-print bg-white border-b border-stone-200/80 sticky top-0 z-50 shadow-xs">
+      {/* Visual Navigation Header - Hidden on prints automatically */}
+      <header className="no-print bg-white border-b border-stone-200/80 sticky top-0 z-50 shadow-xs transition duration-200">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-3.5 flex flex-col md:flex-row md:items-center justify-between gap-4">
           <div className="flex items-center gap-3.5 cursor-pointer select-none" onClick={() => setActiveTab("lobby")}>
-            <div className="w-11 h-11 rounded-xl bg-gradient-to-br from-amber-700 to-amber-900 text-stone-100 flex items-center justify-center font-bold text-xl shadow-md border border-amber-950/20">TS</div>
+            <div className="w-11 h-11 rounded-xl bg-gradient-to-br from-amber-700 to-amber-900 text-stone-100 flex items-center justify-center font-bold text-xl shadow-md border border-amber-950/20">
+              TS
+            </div>
             <div>
-              <h1 className="text-md sm:text-lg font-black tracking-tight text-stone-900 flex flex-wrap items-center gap-x-2">
+              <h1 className="text-md sm:text-lg font-black tracking-tight text-stone-900 flex flex-wrap items-center gap-x-2 gap-y-0.5">
                 <span>GSAT English Mock Paper Creator</span>
                 <span className="text-amber-800 font-semibold text-sm sm:text-base">學測英文模考創建器</span>
               </h1>
-              <p className="text-[11px] text-stone-500 mt-0.5">
-                <span className="text-amber-800">★</span> <span className="underline decoration-amber-600/40">Designed by Tr. Shirley Du</span>
+              <p className="text-[11px] text-stone-500 font-sans mt-0.5 tracking-wide font-medium flex items-center gap-1.5">
+                <span className="text-amber-800">★</span> <span className="underline decoration-amber-600/40 decoration-2">Designed by Tr. Shirley Du</span>
               </p>
             </div>
           </div>
+
           <nav className="flex items-center gap-1 sm:gap-2 text-xs">
             {examSuite && (
               <>
-                <button onClick={() => setActiveTab("player")} className={`px-3 py-2 rounded-lg font-semibold transition flex items-center gap-1.5 ${activeTab === "player" ? "bg-teal-50 text-teal-900" : "text-stone-600 hover:bg-stone-50"}`}>
-                  <GraduationCap className="w-4 h-4 text-teal-700" /> Test Player
+                <button
+                  onClick={() => setActiveTab("player")}
+                  className={`px-3 py-2 rounded-lg font-semibold transition duration-150 flex items-center gap-1.5 ${
+                    activeTab === "player" 
+                      ? "bg-teal-50 text-teal-850" 
+                      : "text-stone-600 hover:bg-stone-50"
+                  }`}
+                  id="nav-player-btn"
+                >
+                  <GraduationCap className="w-4 h-4 text-teal-700" />
+                  Test Player (模擬練題)
                 </button>
-                <button onClick={() => setActiveTab("worksheet")} className={`px-3 py-2 rounded-lg font-semibold transition flex items-center gap-1.5 ${activeTab === "worksheet" ? "bg-amber-50 text-amber-900" : "text-stone-600 hover:bg-stone-50"}`}>
-                  <Printer className="w-4 h-4 text-amber-800" /> Worksheet
+
+                <button
+                  onClick={() => setActiveTab("worksheet")}
+                  className={`px-3 py-2 rounded-lg font-semibold transition duration-150 flex items-center gap-1.5 ${
+                    activeTab === "worksheet" 
+                      ? "bg-amber-50 text-amber-900" 
+                      : "text-stone-600 hover:bg-stone-50"
+                  }`}
+                  id="nav-worksheet-btn"
+                >
+                  <Printer className="w-4 h-4 text-amber-800" />
+                  Worksheet (列印考卷)
                 </button>
               </>
             )}
+
             {activeReport && (
-              <button onClick={() => setActiveTab("report")} className={`px-3 py-2 rounded-lg font-semibold transition flex items-center gap-1.5 ${activeTab === "report" ? "bg-stone-800 text-white" : "text-stone-600 hover:bg-stone-50"}`}>
-                <Award className="w-4 h-4 text-amber-400" /> Report
+              <button
+                onClick={() => setActiveTab("report")}
+                className={`px-3 py-2 rounded-lg font-semibold transition duration-150 flex items-center gap-1.5 ${
+                  activeTab === "report" 
+                    ? "bg-stone-850 text-white" 
+                    : "text-stone-600 hover:bg-stone-50"
+                }`}
+                id="nav-report-btn"
+              >
+                <Award className="w-4 h-4 text-amber-400" />
+                Report (成績單)
               </button>
             )}
           </nav>
         </div>
       </header>
 
+      {/* Main Dynamic Workspace Area */}
       <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8">
-
-        {/* ── LOBBY ── */}
+        
+        {/* LOBBY / SETUP SCREEN */}
         {activeTab === "lobby" && (
-          <div className="space-y-8" id="lobby-panel">
-            <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
+          <div className="space-y-8 animate-fade-in" id="lobby-panel">
 
-              {/* Config panel */}
-              <div className="lg:col-span-8 bg-white border border-stone-200 rounded-2xl p-6 md:p-8 shadow-xs space-y-6">
+            {/* Config Box and Options */}
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
+              
+              {/* Left Column: Vocabulary feed and checklist (8 cols) */}
+              <div className="lg:col-span-8 bg-white border border-stone-200/90 rounded-2xl p-6 md:p-8 shadow-xs space-y-6">
                 <div className="border-b border-stone-150 pb-4">
-                  <h3 className="text-lg font-bold text-stone-900 flex items-center gap-2">
-                    <Layers className="w-5 h-5 text-amber-800" /> Step 1: Choose Vocabulary Source
+                  <h3 className="text-lg font-bold font-display text-stone-900 flex items-center gap-2">
+                    <Layers className="w-5 h-5 text-amber-800" />
+                    Step 1: Choose Vocabulary Source / 設定學測候選字彙來源
                   </h3>
+                  <p className="text-xs text-stone-500 mt-1">Select the core target vocabulary levels/units, or paste your custom word list. / 選定本測驗的核心字表字級、篩選單元，或直接自主貼上自訂單字表。</p>
                 </div>
 
-                {/* Vocab source toggle */}
-                <div className="grid grid-cols-2 gap-3 p-1.5 bg-stone-100 rounded-xl">
-                  <button onClick={() => setVocabSource("system")} className={`py-2 rounded-lg text-xs font-bold transition ${vocabSource === "system" ? "bg-white text-stone-900 shadow-xs" : "text-stone-500 hover:text-stone-800"}`}>
+                {/* Vocabulary Source Mode Selectors */}
+                <div className="grid grid-cols-2 gap-3 p-1.5 bg-stone-100 rounded-xl" id="vocab-source-container">
+                  <button
+                    onClick={() => setVocabSource("system")}
+                    className={`py-2 rounded-lg text-xs font-bold transition duration-200 flex items-center justify-center gap-1.5 ${
+                      vocabSource === "system" 
+                        ? "bg-white text-stone-900 shadow-xs" 
+                        : "text-stone-500 hover:text-stone-800"
+                    }`}
+                    id="source-system-btn"
+                  >
                     System Database 系統內建單字庫
                   </button>
-                  <button onClick={() => setVocabSource("self-input")} className={`py-2 rounded-lg text-xs font-bold transition ${vocabSource === "self-input" ? "bg-white text-stone-900 shadow-xs" : "text-stone-500 hover:text-stone-800"}`}>
+                  <button
+                    onClick={() => setVocabSource("self-input")}
+                    className={`py-2 rounded-lg text-xs font-bold transition duration-200 flex items-center justify-center gap-1.5 ${
+                      vocabSource === "self-input" 
+                        ? "bg-white text-stone-900 shadow-xs" 
+                        : "text-stone-500 hover:text-stone-800"
+                    }`}
+                    id="source-self-btn"
+                  >
                     Self-Input List 自訂單字輸入
                   </button>
                 </div>
 
+                {/* Vocabulary Mode Configuration Panel */}
                 {vocabSource === "system" ? (
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 bg-stone-50/50 p-4 rounded-xl border border-stone-100">
-                    {/* Level */}
-                    <div className="space-y-1.5">
-                      <label className="text-xs font-bold uppercase text-stone-500">Syllabus Level (字級)</label>
-                      <select value={selectedLevel} onChange={(e) => setSelectedLevel(parseInt(e.target.value))}
-                        className="w-full bg-white border border-stone-300 rounded-xl px-3 py-2 text-xs font-semibold focus:outline-none focus:ring-1 focus:ring-teal-700">
-                        {[1,2,3,4,5,6].map(l => (
-                          <option key={l} value={l}>Level {l} ({l <= 2 ? "Basic" : l <= 4 ? "Essential" : "Advanced"})</option>
-                        ))}
+                    
+                    {/* Level Select */}
+                    <div className="space-y-1.5" id="level-select-container">
+                      <label className="text-xs font-bold font-sans uppercase text-stone-500 flex items-center gap-1">
+                        Syllabus Level (篩選學測字級)
+                      </label>
+                      <select
+                        value={selectedLevel}
+                        onChange={(e) => setSelectedLevel(parseInt(e.target.value))}
+                        className="w-full bg-white border border-stone-300 hover:border-stone-400 rounded-xl px-3 py-2 text-xs font-semibold focus:outline-none focus:ring-1 focus:ring-teal-700 transition"
+                        id="level-selector-dropdown"
+                      >
+                        <option value={1}>Level 1 (Basic / 基礎級)</option>
+                        <option value={2}>Level 2 (Basic / 基礎級)</option>
+                        <option value={3}>Level 3 (Essential / 核心級)</option>
+                        <option value={4}>Level 4 (Essential / 核心級)</option>
+                        <option value={5}>Level 5 (Advanced / 進階級)</option>
+                        <option value={6}>Level 6 (Advanced / 進階級)</option>
                       </select>
                     </div>
 
-                    {/* Units */}
-                    <div className="space-y-1.5 relative">
-                      <label className="text-xs font-bold uppercase text-stone-500">Filter Units (篩選單元)</label>
-                      <button type="button" onClick={() => setUnitsDropdownOpen(!unitsDropdownOpen)}
-                        className="w-full bg-white border border-stone-300 rounded-xl px-3 py-2 text-xs font-semibold flex items-center justify-between cursor-pointer">
-                        <span>{selectedUnits.length === 0 ? "All Units" : `${selectedUnits.length} Units selected`}</span>
-                        <span className="text-stone-400">▼</span>
-                      </button>
-                      {unitsDropdownOpen && (
-                        <div className="absolute top-10 right-0 left-0 bg-white border border-stone-200 rounded-xl shadow-md p-3 z-30 max-h-56 overflow-y-auto space-y-2">
-                          <input type="text" placeholder="Search unit..." value={unitSearch} onChange={(e) => setUnitSearch(e.target.value)}
-                            className="w-full border border-stone-200 rounded-md p-1.5 text-xs focus:outline-none" />
-                          <div className="flex justify-between text-[10px] text-teal-800 font-bold pb-1">
-                            <button type="button" onClick={() => setSelectedUnits(uniqueUnits)}>Select All</button>
-                            <button type="button" onClick={() => setSelectedUnits([])} className="text-rose-800">Clear</button>
+                    {/* Multi Units Select dropdown popover */}
+                    <div className="space-y-1.5 relative" id="unit-select-container">
+                      <label className="text-xs font-bold font-sans uppercase text-stone-500">
+                        Filter Units (篩選單元)
+                      </label>
+                      
+                      <div className="relative">
+                        <button
+                          type="button"
+                          onClick={() => setUnitsDropdownOpen(!unitsDropdownOpen)}
+                          className="w-full bg-white border border-stone-300 hover:border-stone-400 rounded-xl px-3 py-2 text-xs font-semibold focus:outline-none flex items-center justify-between transition cursor-pointer"
+                          id="unit-dropdown-trigger"
+                        >
+                          <span className="truncate">
+                            {selectedUnits.length === 0 
+                              ? "All Units" 
+                              : `Selected ${selectedUnits.length} Units`}
+                          </span>
+                          <span className="text-stone-400 text-[10px]">▼</span>
+                        </button>
+
+                        {unitsDropdownOpen && (
+                          <div className="absolute top-10 right-0 left-0 bg-white border border-stone-200 rounded-xl shadow-md p-3 z-30 max-h-56 overflow-y-auto space-y-2">
+                            <div className="flex items-center gap-2 border-b border-stone-100 pb-2">
+                              <input
+                                type="text"
+                                placeholder="Search unit..."
+                                value={unitSearch}
+                                onChange={(e) => setUnitSearch(e.target.value)}
+                                className="w-full border border-stone-200 rounded-md p-1.5 text-xs focus:outline-none focus:ring-1 focus:ring-teal-700"
+                              />
+                            </div>
+
+                            <div className="flex justify-between items-center text-[10px] text-teal-800 font-bold border-b border-stone-100 pb-1 px-1">
+                              <button type="button" onClick={() => setSelectedUnits(uniqueUnits)} className="hover:underline">Select All</button>
+                              <button type="button" onClick={() => setSelectedUnits([])} className="hover:underline text-rose-800">Clear All</button>
+                            </div>
+
+                            <div className="space-y-1 pt-1 max-h-36 overflow-y-auto">
+                              {loadingCSV ? (
+                                <p className="text-[10px] text-stone-500 text-center py-2 animate-pulse">Loading lists...</p>
+                              ) : filteredUnits.length === 0 ? (
+                                <p className="text-[10px] text-stone-400 text-center py-2">No units found</p>
+                              ) : (
+                                filteredUnits.map((unit) => {
+                                  const isChecked = selectedUnits.includes(unit);
+                                  return (
+                                    <label key={unit} className="flex items-center gap-2 p-1 hover:bg-stone-50 rounded cursor-pointer text-xs">
+                                      <input
+                                        type="checkbox"
+                                        checked={isChecked}
+                                        onChange={() => {
+                                          if (isChecked) {
+                                            setSelectedUnits(selectedUnits.filter(u => u !== unit));
+                                          } else {
+                                            setSelectedUnits([...selectedUnits, unit]);
+                                          }
+                                        }}
+                                        className="rounded border-stone-300 text-teal-700 focus:ring-teal-700 w-3.5 h-3.5"
+                                      />
+                                      <span>Unit {unit}</span>
+                                    </label>
+                                  );
+                                })
+                              )}
+                            </div>
                           </div>
-                          {loadingCSV ? <p className="text-[10px] text-center py-2 animate-pulse">Loading...</p> :
-                            filteredUnits.map(unit => {
-                              const isChecked = selectedUnits.includes(unit);
-                              return (
-                                <label key={unit} className="flex items-center gap-2 p-1 hover:bg-stone-50 rounded cursor-pointer text-xs">
-                                  <input type="checkbox" checked={isChecked}
-                                    onChange={() => isChecked ? setSelectedUnits(selectedUnits.filter(u => u !== unit)) : setSelectedUnits([...selectedUnits, unit])}
-                                    className="rounded border-stone-300 text-teal-700 w-3.5 h-3.5" />
-                                  Unit {unit}
-                                </label>
-                              );
-                            })}
-                        </div>
-                      )}
+                        )}
+                      </div>
                     </div>
 
-                    {/* Word count info — no slider, just show count */}
-                    <div className="sm:col-span-2 border-t border-stone-100 pt-3 mt-1">
-                      <p className="text-xs text-stone-500 font-sans">
-                        <span className="font-bold text-amber-800">{availableWords.filter(w => selectedUnits.includes(w.unit)).length} words</span> available from selected units — all will be passed to the AI for question generation.
-                      </p>
+                    {/* Word Sample Count slider */}
+                    <div className="space-y-1.5 sm:col-span-2 border-t border-stone-100 pt-3 mt-1">
+                      <div className="flex justify-between items-center">
+                        <label className="text-xs font-bold font-sans uppercase text-stone-500 flex items-center gap-1">
+                          No. of Words to Extract (單字提取數量)
+                        </label>
+                        <span className="font-mono text-xs font-bold text-amber-800 bg-amber-50 px-2 py-0.5 rounded">
+                          {randomWordCount} words
+                        </span>
+                      </div>
+                      <input
+                        type="range"
+                        min="5"
+                        max="50"
+                        value={randomWordCount}
+                        onChange={(e) => setRandomWordCount(parseInt(e.target.value))}
+                        className="w-full accent-teal-800 h-1 bg-stone-200 rounded-lg cursor-pointer"
+                        id="word-count-range-slider"
+                      />
                     </div>
+
                   </div>
                 ) : (
-                  <div className="space-y-2 bg-stone-50/50 p-4 rounded-xl border border-stone-100">
-                    <label className="text-xs font-bold uppercase text-stone-500">Paste Word List</label>
-                    <textarea value={selfInputText} onChange={(e) => setSelfInputText(e.target.value)} rows={6}
-                      className="w-full bg-white border border-stone-300 rounded-xl p-3 text-xs font-mono focus:outline-none focus:ring-1 focus:ring-teal-700"
-                      placeholder="accommodate v.&#10;vital adj." />
-                    <p className="text-[10px] text-stone-500">Detected: {parseSelfInputList().length} words</p>
+                  <div className="space-y-2 bg-stone-50/50 p-4 rounded-xl border border-stone-100" id="self-input-container">
+                    <div className="flex justify-between items-start gap-4 flex-wrap">
+                      <label className="text-xs font-bold font-sans uppercase text-stone-500">
+                        Paste Word List (貼上自訂單字表)
+                      </label>
+                      <span className="text-[10px] text-amber-900 font-bold bg-amber-50 px-2 py-1 rounded">
+                        Format: word POS (one per line, meaning optional) / 格式：單字  詞性 (一行一組，中文選填)
+                      </span>
+                    </div>
+                    <textarea
+                      value={selfInputText}
+                      onChange={(e) => {
+                        setSelfInputText(e.target.value);
+                        setSelfInputError(null);
+                      }}
+                      rows={6}
+                      className="w-full bg-white border border-stone-300 hover:border-stone-400 rounded-xl p-3 text-xs font-mono focus:outline-none focus:ring-1 focus:ring-teal-700 transition"
+                      placeholder="accommodate v.&#10;vital adj.&#10;system n."
+                      id="self-input-textarea"
+                    />
+                    <div className="flex justify-between items-center text-[10px] text-stone-500 pt-1 flex-wrap gap-2">
+                      <span>Detected: {parseSelfInputList().length} words / 已偵測: {parseSelfInputList().length} 個單字</span>
+                      <span className="text-stone-400 font-sans"> (If list &lt; 12, system will automatically pad with matching vocab. / 若少於 12 字，系統將自動隨機補足同級單字。)</span>
+                    </div>
                   </div>
                 )}
 
-                {/* Exercise types */}
+                {/* EXERCISE TYPES CONFIGURATION CHECKLIST */}
                 <div className="border-t border-stone-150 pt-6 space-y-4">
-                  <h3 className="text-md font-bold text-stone-900 flex items-center gap-2">
-                    <Settings className="w-5 h-5 text-amber-800" /> Step 2: Choose Sections
-                  </h3>
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    {[
-                      { key: "vocab", label: "Vocabulary MCQ (10 Qs) / 字彙單選題" },
-                    ].map(({ key, label }) => (
-                      <label key={key} className={`border rounded-xl p-4 flex items-center gap-3 cursor-pointer transition ${(selectedExerciseTypes as any)[key] ? "border-teal-400 bg-teal-50/20" : "border-stone-200 bg-white hover:border-stone-300"}`}>
-                        <input type="checkbox" checked={(selectedExerciseTypes as any)[key]}
-                          onChange={() => setSelectedExerciseTypes(prev => ({ ...prev, [key]: !(prev as any)[key] }))}
-                          className="rounded border-stone-300 text-teal-700 w-4 h-4 shrink-0" />
-                        <span className="text-xs font-bold text-stone-900">{label}</span>
-                      </label>
-                    ))}
+                  <div className="pb-1">
+                    <h3 className="text-md font-bold font-display text-stone-900 flex items-center gap-2">
+                      <Settings className="w-5 h-5 text-amber-800" />
+                      Step 2: Choose Mock Quiz Modules / 選擇擬真試卷大題
+                    </h3>
+                    <p className="text-xs text-stone-500 mt-1">Select the specific exam sections you wish to compile in your mock worksheet. / 勾選欲產生的學測模擬大題組合。</p>
+                  </div>
 
-                    {/* Reading with levels */}
-                    <div className={`border rounded-xl p-4 space-y-3 transition ${selectedExerciseTypes.reading ? "border-teal-400 bg-teal-50/20" : "border-stone-200 bg-white hover:border-stone-300"}`}>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4" id="quiz-types-checklist">
+                    {/* 1. Vocab MCQ */}
+                    <label className={`border rounded-xl p-4 flex items-center gap-3 cursor-pointer transition ${
+                      selectedExerciseTypes.vocab 
+                        ? "border-teal-400 bg-teal-50/20" 
+                        : "border-stone-200 hover:border-stone-300 bg-white"
+                    }`}>
+                      <input
+                        type="checkbox"
+                        checked={selectedExerciseTypes.vocab}
+                        onChange={() => setSelectedExerciseTypes(prev => ({ ...prev, vocab: !prev.vocab }))}
+                        className="rounded border-stone-300 text-teal-700 focus:ring-teal-700 w-4 h-4 shrink-0"
+                        id="checkbox-vocab-mcq"
+                      />
+                      <span className="text-xs font-bold text-stone-900 font-sans">
+                        GSAT Vocabulary MCQs (10 Qs) / 詞彙單選題 (10 題)
+                      </span>
+                    </label>
+
+                    {/* 2. Cloze (綜合測驗) */}
+                    <label className={`border rounded-xl p-4 flex items-center gap-3 cursor-pointer transition ${
+                      selectedExerciseTypes.cloze 
+                        ? "border-teal-400 bg-teal-50/20" 
+                        : "border-stone-200 hover:border-stone-300 bg-white"
+                    }`}>
+                      <input
+                        type="checkbox"
+                        checked={selectedExerciseTypes.cloze}
+                        onChange={() => setSelectedExerciseTypes(prev => ({ ...prev, cloze: !prev.cloze }))}
+                        className="rounded border-stone-300 text-teal-700 focus:ring-teal-700 w-4 h-4 shrink-0"
+                        id="checkbox-cloze-test"
+                      />
+                      <span className="text-xs font-bold text-stone-900 font-sans">
+                        GSAT Cloze / Integrated Gaps (5 Qs) / 綜合測驗 - 克漏字 (5 格)
+                      </span>
+                    </label>
+
+                    {/* 3. Blank Matching */}
+                    <label className={`border rounded-xl p-4 flex items-center gap-3 cursor-pointer transition ${
+                      selectedExerciseTypes.blankMatching 
+                        ? "border-teal-400 bg-teal-50/20" 
+                        : "border-stone-200 hover:border-stone-300 bg-white"
+                    }`}>
+                      <input
+                        type="checkbox"
+                        checked={selectedExerciseTypes.blankMatching}
+                        onChange={() => setSelectedExerciseTypes(prev => ({ ...prev, blankMatching: !prev.blankMatching }))}
+                        className="rounded border-stone-300 text-teal-700 focus:ring-teal-700 w-4 h-4 shrink-0"
+                        id="checkbox-blank-matching"
+                      />
+                      <span className="text-xs font-bold text-stone-900 font-sans">
+                        GSAT Blank Matching (10 Gaps) / 文意選填 (10 格)
+                      </span>
+                    </label>
+
+                    {/* 4. Reading Comprehension */}
+                    <div className={`border rounded-xl p-4 space-y-3 transition ${
+                      selectedExerciseTypes.reading 
+                        ? "border-teal-400 bg-teal-50/20" 
+                        : "border-stone-200 hover:border-stone-300 bg-white"
+                    }`}>
                       <label className="flex items-center gap-3 cursor-pointer">
-                        <input type="checkbox" checked={selectedExerciseTypes.reading}
+                        <input
+                          type="checkbox"
+                          checked={selectedExerciseTypes.reading}
                           onChange={() => setSelectedExerciseTypes(prev => ({ ...prev, reading: !prev.reading }))}
-                          className="rounded border-stone-300 text-teal-700 w-4 h-4 shrink-0" />
-                        <span className="text-xs font-bold text-stone-900">Reading Comprehension (4 Qs) / 閱讀測驗</span>
+                          className="rounded border-stone-300 text-teal-700 focus:ring-teal-700 w-4 h-4 shrink-0"
+                          id="checkbox-reading-comprehension"
+                        />
+                        <span className="text-xs font-bold text-stone-900 font-sans">
+                          GSAT Reading Comprehension (4 Qs) / 閱讀測驗 (4 題)
+                        </span>
                       </label>
+
                       {selectedExerciseTypes.reading && (
-                        <div className="pl-7 grid grid-cols-3 gap-2">
-                          {["basic", "essential", "advanced"].map(lvl => (
-                            <button key={lvl} type="button"
-                              onClick={() => selectedReadingLevels.includes(lvl)
-                                ? setSelectedReadingLevels(selectedReadingLevels.filter(l => l !== lvl))
-                                : setSelectedReadingLevels([...selectedReadingLevels, lvl])}
-                              className={`py-1.5 px-2 rounded-lg text-[10px] border font-bold capitalize transition ${selectedReadingLevels.includes(lvl) ? "bg-teal-800 text-white border-teal-800" : "bg-white text-stone-600 border-stone-200 hover:bg-stone-50"}`}>
-                              {lvl === "basic" ? "Basic" : lvl === "essential" ? "Essential" : "Advanced"}
-                            </button>
-                          ))}
+                        <div className="pl-7 grid grid-cols-3 gap-2" id="reading-levels-container">
+                          {["basic", "essential", "advanced"].map(lvl => {
+                            const isLvlChecked = selectedReadingLevels.includes(lvl);
+                            return (
+                              <button
+                                key={lvl}
+                                type="button"
+                                onClick={() => {
+                                  if (isLvlChecked) {
+                                    setSelectedReadingLevels(selectedReadingLevels.filter(l => l !== lvl));
+                                  } else {
+                                    setSelectedReadingLevels([...selectedReadingLevels, lvl]);
+                                  }
+                                }}
+                                className={`py-1.5 px-2 rounded-lg text-[10px] border font-bold capitalize transition duration-150 ${
+                                  isLvlChecked 
+                                    ? "bg-teal-850 text-white border-teal-850 bg-teal-800" 
+                                    : "bg-white text-stone-600 border-stone-200 hover:bg-stone-50"
+                                }`}
+                                id={`reading-lvl-${lvl}-btn`}
+                              >
+                                {lvl === "basic" ? "Basic (L1-2)" : lvl === "essential" ? "Essential (L3-4)" : "Advanced (L5-6)"}
+                              </button>
+                            );
+                          })}
                         </div>
                       )}
                     </div>
                   </div>
                 </div>
 
-                {/* Generate button */}
+                {/* INITIATOR TRIGGER BUTTON */}
                 <div className="border-t border-stone-150 pt-6">
                   {generationError && (
-                    <div className="bg-rose-50 border border-rose-200 p-4 rounded-xl text-rose-800 flex items-start gap-3 mb-4 text-xs">
+                    <div className="bg-rose-50 border border-rose-250 p-4 rounded-xl text-rose-800 flex items-start gap-3 mb-4 text-xs">
                       <AlertCircle className="w-5 h-5 shrink-0" />
-                      <div><p className="font-bold">Error:</p><p>{generationError}</p></div>
+                      <div className="space-y-1">
+                        <p className="font-bold">生卷模組發現錯誤 Error:</p>
+                        <p>{generationError}</p>
+                      </div>
                     </div>
                   )}
+
                   {generationLoading ? (
-                    <div className="bg-stone-50 border border-stone-200 rounded-2xl p-6 text-center">
-                      <div className="flex justify-center items-center gap-2 mb-3">
+                    <div className="space-y-4 bg-stone-50 border border-stone-200 rounded-2xl p-6 text-center shadow-inner">
+                      <div className="flex justify-center items-center gap-2">
                         <RefreshCw className="w-6 h-6 text-teal-800 animate-spin" />
-                        <span className="font-bold text-stone-900">Generating all sections in parallel...</span>
+                        <span className="font-bold text-stone-900 font-display text-base">Mock Paper Creator Engine Operating</span>
                       </div>
-                      <p className="text-xs font-mono text-amber-900 animate-pulse">{loadingStepMsg}</p>
+                      <p className="text-xs font-mono font-medium text-amber-900 tracking-wide animate-pulse" id="loading-message-box">
+                        {loadingStepMsg}
+                      </p>
+                      <p className="text-[10px] text-stone-400">
+                        *由 AI 引擎全速分析語料並製作最貼合學測規範的高水準試題，通常約需數秒。
+                      </p>
                     </div>
                   ) : (
-                    <button onClick={handleGenerateExam}
-                      className="w-full bg-teal-800 hover:bg-teal-900 text-white rounded-2xl py-4 font-semibold text-sm flex items-center justify-center gap-2 shadow-md transition">
+                    <button
+                      onClick={handleGenerateExam}
+                      className="w-full bg-teal-800 hover:bg-teal-900 text-white rounded-2xl py-4 font-semibold text-sm flex items-center justify-center gap-2 shadow-md hover:shadow-teal-800/10 active:scale-[0.99] transition duration-200"
+                      id="generate-exam-suite-btn"
+                    >
                       <Sparkles className="w-4 h-4 text-amber-300" />
                       一鍵完美生卷 (Generate Exam)
                       <ArrowRight className="w-4 h-4" />
                     </button>
                   )}
                 </div>
+
               </div>
 
-              {/* History panel */}
-              <div className="lg:col-span-4 no-print">
+              {/* Right Column: Study History Board (4 cols) */}
+              <div className="lg:col-span-4 space-y-6 no-print">
+
+                {/* Cumulative study history timeline */}
                 <div className="bg-white border border-stone-200 rounded-2xl p-5 shadow-xs space-y-4">
                   <div className="flex justify-between items-center border-b border-stone-100 pb-3">
-                    <h3 className="text-xs font-bold uppercase tracking-wider text-stone-900 flex items-center gap-2">
-                      <History className="w-4 h-4 text-amber-800" /> Study History
+                    <h3 className="text-xs font-bold font-display uppercase tracking-wider text-stone-900 flex items-center gap-2">
+                      <History className="w-4 h-4 text-amber-800" />
+                      Study History Board (累積備考成就)
                     </h3>
                     {studyHistory.length > 0 && (
-                      <button onClick={handleClearHistory} className="text-[10px] text-rose-800 hover:underline font-bold">Clear All</button>
+                      <button
+                        onClick={handleClearHistory}
+                        className="text-[10px] text-rose-800 hover:underline font-bold"
+                        id="clear-logs-btn"
+                      >
+                        Clear All
+                      </button>
                     )}
                   </div>
+
                   {studyHistory.length === 0 ? (
                     <div className="text-center py-8 text-stone-400 space-y-2">
                       <Layers className="w-8 h-8 mx-auto stroke-1" />
-                      <p className="text-[11px]">尚未有練習紀錄。快開始備考吧！</p>
+                      <p className="text-[11px] font-sans">
+                        目前尚未有練習任務歷史。<br />快在左側勾選單字與題型開始寫考卷吧！
+                      </p>
                     </div>
                   ) : (
-                    <div className="space-y-3 max-h-64 overflow-y-auto">
-                      {studyHistory.map(log => (
-                        <div key={log.sessionId} onClick={() => { setActiveReport(log); setActiveTab("report"); }}
-                          className="bg-stone-50 border p-3 rounded-xl hover:border-amber-300 cursor-pointer flex justify-between items-center transition">
-                          <div>
-                            <span className="text-[10px] text-stone-500 font-mono">{new Date(log.timestamp).toLocaleDateString()}</span>
-                            <p className="text-xs font-bold text-stone-900">Accuracy: {log.scoreSummary.comprehensive.score}%</p>
-                            <span className="text-[10px] text-stone-500">{log.scoreSummary.comprehensive.correct}/{log.scoreSummary.comprehensive.total} correct</span>
+                    <div className="space-y-3 max-h-64 overflow-y-auto" id="history-logs-shelf">
+                      {studyHistory.map((log) => (
+                        <div
+                          key={log.sessionId}
+                          className="bg-stone-50 border border-stone-150 p-3 rounded-xl hover:border-amber-300 hover:bg-stone-100/50 transition duration-200 cursor-pointer flex justify-between items-center"
+                          onClick={() => {
+                            setActiveReport(log);
+                            setActiveTab("report");
+                          }}
+                          id={`history-log-${log.sessionId}`}
+                        >
+                          <div className="space-y-0.5">
+                            <span className="text-[10px] text-stone-500 font-mono">
+                              {new Date(log.timestamp).toLocaleDateString()} Completer
+                            </span>
+                            <p className="text-xs font-bold font-display text-stone-900">
+                              Comprehensive Accuracy Accuracy: {log.scoreSummary.comprehensive.score}%
+                            </p>
+                            <span className="text-[10px] text-stone-500 font-sans block">
+                              Total correct count: {log.scoreSummary.comprehensive.correct}/{log.scoreSummary.comprehensive.total}
+                            </span>
                           </div>
-                          <span className={`w-8 h-8 rounded-full flex items-center justify-center font-mono text-[10px] font-bold shrink-0 ${log.scoreSummary.comprehensive.score >= 80 ? "bg-teal-100 text-teal-800" : log.scoreSummary.comprehensive.score >= 60 ? "bg-amber-100 text-amber-900" : "bg-rose-100 text-rose-900"}`}>
+                          <span className={`w-8 h-8 rounded-full flex items-center justify-center font-mono text-[10px] font-bold shrink-0 ${
+                            log.scoreSummary.comprehensive.score >= 80 
+                              ? "bg-teal-100 text-teal-800" 
+                              : log.scoreSummary.comprehensive.score >= 60 
+                                ? "bg-amber-100 text-amber-900" 
+                                : "bg-rose-100 text-rose-900"
+                          }`}>
                             {log.scoreSummary.comprehensive.score}%
                           </span>
                         </div>
@@ -541,85 +950,184 @@ export default function App() {
                     </div>
                   )}
                 </div>
+
               </div>
+
             </div>
+
           </div>
         )}
 
-        {/* ── PLAYER ── */}
+        {/* INTERACTIVE TEST PLAYER SCREEN */}
         {activeTab === "player" && examSuite && (
-          <div className="space-y-6" id="quiz-player-dashboard">
+          <div className="space-y-6 animate-fade-in" id="quiz-player-dashboard">
+            
+            {/* Quick dashboard bar */}
             <div className="bg-white border border-stone-200 rounded-2xl p-4 md:p-6 flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
-              <div>
-                <span className="bg-amber-100 font-mono text-[9px] px-2 py-0.5 rounded font-bold uppercase text-amber-900">Level {examSuite.metadata.selectedLevel}</span>
-                <h2 className="text-xl font-bold text-stone-900 mt-1">英語學測仿真複習卷</h2>
-                <p className="text-xs text-stone-500">{examSuite.metadata.vocabCount} reference words</p>
+              <div className="space-y-1">
+                <span className="bg-amber-100 font-mono text-[9px] px-2 py-0.5 rounded font-bold uppercase tracking-wider text-amber-900">
+                  Level {examSuite.metadata.selectedLevel} Practice
+                </span>
+                <h2 className="text-xl font-bold font-display text-stone-900">
+                  英語學測仿真複習卷 (Buffet Practice Mode)
+                </h2>
+                <p className="text-xs text-stone-500 font-sans">
+                  Active words: {examSuite.metadata.vocabCount} reference terms
+                </p>
               </div>
-              <div className="flex gap-2">
-                <button onClick={() => setActiveTab("worksheet")} className="px-4 py-2 bg-stone-100 hover:bg-stone-200 text-stone-700 rounded-xl text-xs font-semibold flex items-center gap-1.5 border transition">
-                  <Printer className="w-4 h-4" /> Print Worksheet
+
+              {/* Action shortcuts */}
+              <div className="flex flex-wrap items-center gap-2 w-full md:w-auto">
+                <button
+                  onClick={() => setActiveTab("worksheet")}
+                  className="px-4 py-2 bg-stone-100 hover:bg-stone-200 text-stone-700 hover:text-stone-900 rounded-xl text-xs font-semibold flex items-center gap-1.5 border border-stone-200/80 transition"
+                  id="player-to-worksheet-tab-btn"
+                >
+                  <Printer className="w-4 h-4" />
+                  Print Exam Worksheet
                 </button>
-                <button onClick={handleInteractiveSubmitAnswers} className="px-4 py-2 bg-teal-800 hover:bg-teal-900 text-white rounded-xl text-xs font-semibold flex items-center gap-1.5 shadow-sm transition">
-                  <CheckCircle className="w-4 h-4" /> Submit & Diagnose
+                <button
+                  onClick={handleInteractiveSubmitAnswers}
+                  className="px-4 py-2 bg-teal-800 hover:bg-teal-900 text-white rounded-xl text-xs font-semibold flex items-center gap-1.5 shadow-sm transition duration-200"
+                  id="submit-exam-suite-btn"
+                >
+                  <CheckCircle className="w-4 h-4" />
+                  Submit Answers & Diagnose
                 </button>
               </div>
             </div>
 
+            {/* Layout split: Left Side Menu, Right Side exercise viewport */}
             <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-              {/* Section nav */}
-              <div className="lg:col-span-3 flex flex-col gap-2 bg-white p-3 border border-stone-200 rounded-2xl shadow-xs">
-                <span className="text-[10px] font-bold font-mono uppercase text-stone-500 text-center py-1">Sections</span>
+              
+              {/* Left sidebar sub nav selector (3 cols) */}
+              <div className="lg:col-span-3 flex flex-col gap-2 bg-white p-3 border border-stone-200 rounded-2xl shadow-xs" id="player-sections-nav">
+                <span className="text-[10px] font-bold font-mono uppercase text-stone-500 px-3 py-1.5 select-none text-center">Sections Checklist</span>
+                
                 {examSuite.vocabQuestions && (
-                  <button onClick={() => setCurrentSection("vocab")} className={`px-3 py-2.5 rounded-xl text-xs font-bold flex items-center justify-between transition ${currentSection === "vocab" ? "bg-teal-700 text-white" : "text-stone-600 hover:bg-stone-50"}`}>
-                    <span>Part I: MCQ字彙題</span><span className="bg-black/10 text-[9px] px-2 py-0.5 rounded-full">10 Qs</span>
+                  <button
+                    onClick={() => setCurrentSection("vocab")}
+                    className={`px-3 py-2.5 rounded-xl text-xs font-bold flex items-center justify-between transition ${
+                      currentSection === "vocab" 
+                        ? "bg-teal-700 text-white font-display" 
+                        : "text-stone-600 hover:bg-stone-50"
+                    }`}
+                    id="section-nav-vocab"
+                  >
+                    <span>Part I: MCQ字彙題</span>
+                    <span className="bg-black/10 text-[9px] px-2 py-0.5 rounded-full font-mono">10 Qs</span>
                   </button>
                 )}
-                {examSuite.readingPassages?.length > 0 && (
-                  <button onClick={() => setCurrentSection("reading")} className={`px-3 py-2.5 rounded-xl text-xs font-bold flex items-center justify-between transition ${currentSection === "reading" ? "bg-teal-700 text-white" : "text-stone-600 hover:bg-stone-50"}`}>
-                    <span>Part II: Reading 閱讀</span><span className="bg-black/10 text-[9px] px-2 py-0.5 rounded-full">{(examSuite.readingPassages?.length || 0) * 4} Qs</span>
+
+                {examSuite.clozeSuite && (
+                  <button
+                    onClick={() => setCurrentSection("cloze")}
+                    className={`px-3 py-2.5 rounded-xl text-xs font-bold flex items-center justify-between transition ${
+                      currentSection === "cloze" 
+                        ? "bg-teal-700 text-white font-display" 
+                        : "text-stone-600 hover:bg-stone-50"
+                    }`}
+                    id="section-nav-cloze"
+                  >
+                    <span>Part II: Cloze 綜合測驗</span>
+                    <span className="bg-black/10 text-[9px] px-2 py-0.5 rounded-full font-mono">5 Gaps</span>
                   </button>
                 )}
-                <div className="border-t border-stone-100 pt-3 mt-2 text-center">
-                  <p className="text-[10px] text-stone-400 font-sans leading-relaxed">完成所有題目後，<br />點擊右上角「Submit」提交。</p>
+
+                {examSuite.blankMatchingSuite && (
+                  <button
+                    onClick={() => setCurrentSection("matching")}
+                    className={`px-3 py-2.5 rounded-xl text-xs font-bold flex items-center justify-between transition ${
+                      currentSection === "matching" 
+                        ? "bg-teal-700 text-white font-display" 
+                        : "text-stone-600 hover:bg-stone-50"
+                    }`}
+                    id="section-nav-matching"
+                  >
+                    <span>Part III: 文意選填 matching</span>
+                    <span className="bg-black/10 text-[9px] px-2 py-0.5 rounded-full font-mono">10 Gaps</span>
+                  </button>
+                )}
+
+                {examSuite.readingPassages && examSuite.readingPassages.length > 0 && (
+                  <button
+                    onClick={() => setCurrentSection("reading")}
+                    className={`px-3 py-2.5 rounded-xl text-xs font-bold flex items-center justify-between transition ${
+                      currentSection === "reading" 
+                        ? "bg-teal-700 text-white font-display" 
+                        : "text-stone-600 hover:bg-stone-50"
+                    }`}
+                    id="section-nav-reading"
+                  >
+                    <span>Part IV: Reading Comprehension 閱讀</span>
+                    <span className="bg-black/10 text-[9px] px-2 py-0.5 rounded-full font-mono">
+                      {examSuite.readingPassages.length * 4} Qs
+                    </span>
+                  </button>
+                )}
+
+                <div className="border-t border-stone-100 pt-3 mt-4 flex flex-col gap-2">
+                  <button
+                    onClick={handleInteractiveSubmitAnswers}
+                    className="w-full bg-teal-800 hover:bg-teal-900 text-white text-xs font-semibold py-2 rounded-xl transition shadow-xs"
+                    id="sbmit-side-btn"
+                  >
+                    Diagnose Grade Now
+                  </button>
                 </div>
               </div>
 
-              {/* Viewport */}
-              <div className="lg:col-span-9 bg-white border border-stone-200 p-6 md:p-8 rounded-2xl shadow-xs">
-
-                {/* 1. VOCAB — uses vocab_${qIndex} as key */}
+              {/* Right viewport: Display active exercise suite (9 cols) */}
+              <div className="lg:col-span-9 bg-white border border-stone-200 p-6 md:p-8 rounded-2xl shadow-xs" id="player-exercise-viewport">
+                
+                {/* 1. VOCABULARY VIEW */}
                 {currentSection === "vocab" && examSuite.vocabQuestions && (
-                  <div className="space-y-6">
+                  <div className="space-y-6" id="player-vocab-section">
                     <div className="border-b border-stone-100 pb-3 flex justify-between items-center">
-                      <h3 className="text-base font-bold text-stone-900">Part I: Vocabulary MCQ (字彙單選題 1–10)</h3>
-                      <span className="text-[10px] font-mono text-stone-500">
-                        {Object.keys(session.answers.vocab).length}/10 answered
-                      </span>
+                      <h3 className="text-base font-bold font-display text-stone-900">
+                        Part I: Multiple-Choice Questions (10 學測模擬字彙單選)
+                      </h3>
+                      <span className="text-[10px] font-mono font-bold text-stone-500">Progress: {Object.keys(session.answers.vocab).length}/10 answered</span>
                     </div>
+
                     <div className="space-y-8">
                       {examSuite.vocabQuestions.map((q, qIndex) => {
-                        const answerKey = `vocab_${qIndex}`;
-                        const userSelectedChoice = session.answers.vocab[answerKey] || "";
-                        const questionText = q.question || q.prompt || q.sentence || q.stem || "";
+                        const userSelectedChoice = session.answers.vocab[q.id] || "";
                         return (
-                          <div key={answerKey} className="space-y-3 p-4 hover:bg-stone-50/50 rounded-xl border border-transparent hover:border-stone-150">
-                            <span className="font-mono text-xs font-bold text-amber-800 bg-amber-50 rounded-lg px-2 py-0.5">Question {qIndex + 1}</span>
-                            {questionText ? (
-                              <p className="font-semibold text-stone-900 text-base leading-relaxed">{questionText}</p>
-                            ) : (
-                              <p className="text-xs text-rose-500 italic">⚠ Question text missing — please regenerate.</p>
-                            )}
-                            {q._warning && (
-                              <p className="text-xs text-amber-600 bg-amber-50 border border-amber-200 rounded px-2 py-1 mt-1">⚠ {q._warning}</p>
-                            )}
+                          <div key={q.id} className="space-y-3 text-sm p-4 hover:bg-stone-50/50 rounded-xl transition duration-150 border border-transparent hover:border-stone-150">
+                            <span className="font-mono text-xs font-bold text-amber-800 bg-amber-50 rounded-lg px-2 py-0.5">
+                              Question {qIndex + 1}
+                            </span>
+                            <p className="font-semibold text-stone-900 text-base leading-relaxed">
+                              {q.question}
+                            </p>
+
+                            {/* Clickable beautiful options split horizontally as layout guideline */}
                             <div className="grid grid-cols-1 md:grid-cols-4 gap-2.5 mt-4">
-                              {normalizeOptions(q.options).map((optString, optIdx) => {
-                                const letter = optString.charAt(1);
+                              {["A", "B", "C", "D"].map((letter) => {
+                                // Match the option string
+                                const optString = q.options.find(o => o.startsWith(`(${letter})`)) || `(${letter})`;
                                 const isSelected = userSelectedChoice === letter;
                                 return (
-                                  <button key={optIdx} type="button"
-                                    onClick={() => setSession(prev => ({ ...prev, answers: { ...prev.answers, vocab: { ...prev.answers.vocab, [answerKey]: letter } } }))}
-                                    className={`py-3 px-4 rounded-xl text-xs text-left font-semibold border transition ${isSelected ? "bg-teal-700 text-white border-teal-700" : "bg-white text-stone-700 border-stone-250 hover:bg-stone-50"}`}>
+                                  <button
+                                    key={letter}
+                                    type="button"
+                                    onClick={() => {
+                                      setSession(prev => ({
+                                        ...prev,
+                                        answers: {
+                                          ...prev.answers,
+                                          vocab: { ...prev.answers.vocab, [q.id]: letter }
+                                        }
+                                      }));
+                                    }}
+                                    className={`py-3 px-4 rounded-xl text-xs text-left font-semibold transition border ${
+                                      isSelected
+                                        ? "bg-teal-700 text-white border-teal-700 shadow-sm shadow-teal-700/15"
+                                        : "bg-white text-stone-700 border-stone-250 hover:bg-stone-50"
+                                    }`}
+                                    id={`player-vocab-q-${qIndex}-opt-${letter}`}
+                                  >
                                     {optString}
                                   </button>
                                 );
@@ -632,38 +1140,207 @@ export default function App() {
                   </div>
                 )}
 
-                {/* 2. READING */}
-                {currentSection === "reading" && examSuite.readingPassages && (
-                  <div className="space-y-8">
+                {/* 2. CLOZE (综合测验) */}
+                {currentSection === "cloze" && examSuite.clozeSuite && (
+                  <div className="space-y-6" id="player-cloze-section">
                     <div className="border-b border-stone-100 pb-3">
-                      <h3 className="text-base font-bold text-stone-900">Part IV: Reading Comprehension (閱讀測驗 11+)</h3>
-                      <p className="text-xs text-stone-500 mt-0.5">仔細閱讀文章後作答。</p>
+                      <h3 className="text-base font-bold font-display text-stone-900">
+                        Part II: Cloze Test (學測綜合測驗克漏字)
+                      </h3>
+                      <p className="text-xs text-stone-500 mt-0.5">評估段落字音語意與搭配詞結構，點擊底下的代碼選項格來答題。</p>
                     </div>
+
+                    <div className="bg-stone-50 border border-stone-200 rounded-2xl p-5 md:p-6 text-base font-sans leading-loose text-stone-800 tracking-wide whitespace-pre-wrap">
+                      {examSuite.clozeSuite.passage}
+                    </div>
+
+                    <div className="space-y-6 mt-8">
+                      <span className="text-xs font-bold font-mono text-stone-400 uppercase tracking-widest block">Choose option choices:</span>
+                      {examSuite.clozeSuite.questions.map((q, idx) => {
+                        const userSel = session.answers.cloze[q.gapNumber] || "";
+                        return (
+                          <div key={idx} className="bg-white border border-stone-200 rounded-xl p-4 space-y-3">
+                            <span className="text-xs font-bold font-mono text-amber-850">Gaps ({q.gapNumber}) Selector</span>
+                            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                              {["A", "B", "C", "D"].map((letter) => {
+                                const optString = q.options.find(o => o.startsWith(`(${letter})`)) || `(${letter})`;
+                                const isSelected = userSel === letter;
+                                return (
+                                  <button
+                                    key={letter}
+                                    type="button"
+                                    onClick={() => {
+                                      setSession(prev => ({
+                                        ...prev,
+                                        answers: {
+                                          ...prev.answers,
+                                          cloze: { ...prev.answers.cloze, [q.gapNumber]: letter }
+                                        }
+                                      }));
+                                    }}
+                                    className={`py-2 px-3 rounded-lg text-xs font-semibold text-center border transition ${
+                                      isSelected
+                                        ? "bg-teal-700 text-white border-teal-700"
+                                        : "bg-white text-stone-700 border-stone-300 hover:bg-stone-50"
+                                    }`}
+                                    id={`player-cloze-gap-${q.gapNumber}-opt-${letter}`}
+                                  >
+                                    {optString}
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+
+                {/* 3. BLANK MATCHING (文意選填) */}
+                {currentSection === "matching" && examSuite.blankMatchingSuite && (
+                  <div className="space-y-6" id="player-matching-section">
+                    <div className="border-b border-stone-100 pb-3">
+                      <h3 className="text-base font-bold font-display text-stone-900">
+                        Part III: Blank Matching (學測文意選填組)
+                      </h3>
+                      <p className="text-xs text-stone-500 mt-0.5">點擊下方考卷空白，為 10 個挖空格對應最適配單字 (A) ~ (J)。每個代碼僅限填選一次。</p>
+                    </div>
+
+                    {/* Candidate lists above passage */}
+                    <div className="bg-stone-100 border border-stone-200 rounded-xl p-4">
+                      <span className="text-xs font-mono font-bold uppercase text-stone-500 block mb-3 text-center">Available Options Table</span>
+                      <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 font-mono text-xs font-semibold">
+                        {examSuite.blankMatchingSuite.options.map((opt, idx) => {
+                          // Extract letter from "(A) beneficial" -> "A"
+                          const letter = opt.charAt(1);
+                          // Check if letter already utilized
+                          const isUsed = Object.values(session.answers.blankMatching).includes(letter);
+                          return (
+                            <div 
+                              key={idx} 
+                              className={`py-2 px-3 rounded-lg border text-center transition ${
+                                isUsed 
+                                  ? "bg-stone-200/50 text-stone-400 line-through border-stone-250 select-none" 
+                                  : "bg-white text-stone-800 border-stone-300 shadow-xs"
+                              }`}
+                            >
+                              {opt}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    {/* The passage */}
+                    <div className="bg-stone-50 border border-stone-200 rounded-2xl p-5 md:p-6 text-base font-sans leading-loose text-stone-800 tracking-wide whitespace-pre-wrap">
+                      {examSuite.blankMatchingSuite.passage}
+                    </div>
+
+                    {/* Selector Select controls array */}
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-8">
+                      {Array.from({ length: 10 }).map((_, idx) => {
+                        const gapNo = idx + 1;
+                        const userSel = session.answers.blankMatching[idx] || "";
+                        return (
+                          <div key={idx} className="bg-white border border-stone-200 rounded-xl p-4 flex justify-between items-center gap-3">
+                            <div>
+                              <span className="text-xs font-bold text-stone-900 font-display">Blank ({gapNo}) Matcher</span>
+                              <p className="text-[10px] text-stone-400 font-sans mt-0.5">Choose which candidates fit blank ({gapNo})</p>
+                            </div>
+                            <select
+                              value={userSel}
+                              onChange={(e) => {
+                                const val = e.target.value;
+                                setSession(prev => ({
+                                  ...prev,
+                                  answers: {
+                                    ...prev.answers,
+                                    blankMatching: { ...prev.answers.blankMatching, [idx]: val }
+                                  }
+                                }));
+                              }}
+                              className="bg-white border border-stone-300 rounded-lg py-1 px-3 text-xs focus:outline-none focus:ring-1 focus:ring-teal-700"
+                              id={`player-matching-gap-${gapNo}`}
+                            >
+                              <option value="">-- Choose Option --</option>
+                              {["A", "B", "C", "D", "E", "F", "G", "H", "I", "J"].map((letter) => {
+                                const fullOptStr = examSuite.blankMatchingSuite!.options.find(o => o.startsWith(`(${letter})`)) || `(${letter})`;
+                                return (
+                                  <option key={letter} value={letter}>
+                                    {fullOptStr}
+                                  </option>
+                                );
+                              })}
+                            </select>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+
+                {/* 4. LEVELED READING COMPREHENSION */}
+                {currentSection === "reading" && examSuite.readingPassages && (
+                  <div className="space-y-8" id="player-reading-section">
+                    <div className="border-b border-stone-100 pb-3">
+                      <h3 className="text-base font-bold font-display text-stone-900">
+                        Part IV: Reading Comprehension (學測分級閱讀測驗)
+                      </h3>
+                      <p className="text-xs text-stone-500 mt-0.5">挑戰精選學測難點，請仔細閱讀文章後作答 4 題多類別單題設計。</p>
+                    </div>
+
                     {examSuite.readingPassages.map((p, pIdx) => (
                       <div key={pIdx} className="space-y-6 border-b border-stone-200 pb-8 last:border-none">
                         <div className="flex items-center gap-2">
-                          <span className="bg-amber-100 text-amber-900 font-mono text-[9px] px-2.5 py-0.5 rounded font-bold uppercase">Level: {p.level}</span>
-                          <h4 className="text-md font-bold font-serif text-stone-950">{p.title}</h4>
+                          <span className="bg-amber-100 text-amber-900 font-mono text-[9px] px-2.5 py-0.5 rounded font-bold uppercase">
+                            Level: {p.level}
+                          </span>
+                          <h4 className="text-md font-bold font-serif text-stone-950">
+                            {p.title}
+                          </h4>
                         </div>
-                        <p className="bg-[#FAF9F5]/70 border border-stone-150 p-6 rounded-2xl text-stone-850 text-base leading-relaxed font-serif whitespace-pre-wrap">{p.passage}</p>
+
+                        <p className="bg-[#FAF9F5]/70 border border-stone-150 p-6 rounded-2xl text-stone-850 text-base leading-relaxed font-serif whitespace-pre-wrap">
+                          {p.passage}
+                        </p>
+
                         <div className="space-y-6 pt-4">
                           {p.questions.map((q, qIdx) => {
-                            const userKey = `${pIdx}_${qIdx}`;
+                            const userKey = `${pIdx}-${qIdx}`;
                             const userAns = session.answers.reading[userKey] || "";
-                            const questionNumber = 11 + (pIdx * 4) + qIdx;
-                            const opts = normalizeOptions(q.options);
                             return (
-                              <div key={userKey} className="bg-stone-50/50 p-4 rounded-xl border border-stone-150/50 space-y-3">
-                                <span className="font-mono text-[11px] font-bold text-stone-500 uppercase block">Question {questionNumber}</span>
-                                <p className="font-semibold text-stone-900 text-sm leading-relaxed">{q.question}</p>
+                              <div key={`${pIdx}-${qIdx}`} className="bg-stone-50/50 p-4 rounded-xl border border-stone-150/50 space-y-3">
+                                <span className="font-mono text-[11px] font-bold text-stone-500 uppercase tracking-wider block">Question {qIdx + 1}</span>
+                                <p className="font-semibold text-stone-900 text-sm leading-relaxed">
+                                  {q.question}
+                                </p>
+
+                                {/* Multiple choice options rendered in a single list on separate lines */}
                                 <div className="flex flex-col gap-2 mt-3 pl-1">
-                                  {opts.map((optStr, optIdx) => {
-                                    const letter = optStr.charAt(1);
+                                  {["A", "B", "C", "D"].map((letter) => {
+                                    const optStr = q.options.find(o => o.startsWith(`(${letter})`)) || `(${letter})`;
                                     const isSelected = userAns === letter;
                                     return (
-                                      <button key={optIdx} type="button"
-                                        onClick={() => setSession(prev => ({ ...prev, answers: { ...prev.answers, reading: { ...prev.answers.reading, [userKey]: letter } } }))}
-                                        className={`py-2 px-4 rounded-lg text-xs text-left font-semibold border transition ${isSelected ? "bg-teal-700 text-white border-teal-700" : "bg-white text-stone-700 border-stone-300 hover:bg-stone-50"}`}>
+                                      <button
+                                        key={letter}
+                                        type="button"
+                                        onClick={() => {
+                                          setSession(prev => ({
+                                            ...prev,
+                                            answers: {
+                                              ...prev.answers,
+                                              reading: { ...prev.answers.reading, [userKey]: letter }
+                                            }
+                                          }));
+                                        }}
+                                        className={`py-2 px-4 rounded-lg text-xs text-left font-semibold border transition ${
+                                          isSelected
+                                            ? "bg-teal-700 text-white border-teal-700"
+                                            : "bg-white text-stone-700 border-stone-300 hover:bg-stone-50"
+                                        }`}
+                                        id={`player-reading-p-${pIdx}-q-${qIdx}-opt-${letter}`}
+                                      >
                                         {optStr}
                                       </button>
                                     );
@@ -678,67 +1355,57 @@ export default function App() {
                   </div>
                 )}
 
+                {/* Next Section Trigger in footer */}
                 <div className="border-t border-stone-150 pt-6 mt-12 flex justify-between items-center text-xs">
-                  <span className="text-stone-400 italic">Have faith in your English intuition!</span>
-                  {currentSection === "vocab" && examSuite.readingPassages?.length > 0 ? (
-                    <button onClick={() => setCurrentSection("reading")} className="px-6 py-3 bg-stone-700 hover:bg-stone-800 text-white font-semibold rounded-2xl flex items-center gap-1.5 shadow-sm transition">
-                      Next: Reading →
-                    </button>
-                  ) : (
-                    <button onClick={handleInteractiveSubmitAnswers} className="px-6 py-3 bg-teal-800 hover:bg-teal-900 text-white font-semibold rounded-2xl flex items-center gap-1.5 shadow-sm transition">
-                      <CheckCircle className="w-4 h-4" /> Submit Final Assessment
-                    </button>
-                  )}
+                  <span className="text-stone-400 font-serif italic">Have faith in your English intuition!</span>
+                  <button
+                    onClick={handleInteractiveSubmitAnswers}
+                    className="px-6 py-3 bg-teal-800 hover:bg-teal-900 text-white font-semibold rounded-2xl flex items-center gap-1.5 shadow-sm transition duration-200"
+                    id="submit-answers-footer"
+                  >
+                    <CheckCircle className="w-4 h-4" />
+                    Submit Final Assessment
+                  </button>
                 </div>
+
               </div>
+
             </div>
+
           </div>
         )}
 
+        {/* PRINTABLE WORKSHEET VIEW SCREEN */}
         {activeTab === "worksheet" && examSuite && (
-          <WorksheetExport suite={examSuite} onBack={() => setActiveTab("player")} />
+          <WorksheetExport 
+            suite={examSuite} 
+            onBack={() => setActiveTab("player")} 
+          />
         )}
 
+        {/* PROGRESS DIAGNOSTICS REPORT SHEET */}
         {activeTab === "report" && activeReport && examSuite && (
           <ProgressReportView
             report={activeReport}
             suite={examSuite}
-            onRestart={() => { setExamSuite(null); setActiveTab("lobby"); }}
-            onGoToWorksheet={() => setActiveTab("worksheet")}
-            onReviewExam={() => setActiveTab("player")}
+            onRestart={() => {
+              // Clear current generated package to reset setup form
+              setExamSuite(null);
+              setActiveTab("lobby");
+            }}
+            onGoToWorksheet={() => {
+              setActiveTab("worksheet");
+            }}
           />
         )}
 
       </main>
 
-      {/* Confirmation modal */}
-      {showSubmitConfirm && (
-        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl p-6 md:p-8 max-w-md w-full shadow-xl space-y-4">
-            <h3 className="text-lg font-bold text-stone-900">確認交卷？</h3>
-            <p className="text-sm text-stone-600">交卷後將無法修改答案。請確認你已完成所有想作答的題目。</p>
-            <div className="bg-stone-50 rounded-xl p-4 text-xs text-stone-600 space-y-1">
-              <p>✅ 字彙題：{Object.keys(session.answers.vocab).length} / {examSuite?.vocabQuestions?.length || 0} answered</p>
-              <p>✅ 閱讀測驗：{Object.keys(session.answers.reading).length} / {(examSuite?.readingPassages?.reduce((a, p) => a + p.questions.length, 0)) || 0} answered</p>
-            </div>
-            <div className="flex gap-3 pt-2">
-              <button onClick={() => setShowSubmitConfirm(false)}
-                className="flex-1 py-2.5 border border-stone-300 rounded-xl text-sm font-semibold text-stone-700 hover:bg-stone-50 transition">
-                繼續作答
-              </button>
-              <button onClick={handleConfirmedSubmit}
-                className="flex-1 py-2.5 bg-teal-800 hover:bg-teal-900 text-white rounded-xl text-sm font-semibold transition">
-                確認交卷
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      <footer className="no-print bg-white border-t border-stone-200 mt-16 py-6 text-center text-[11px] text-stone-500">
+      {/* Persistent Footer */}
+      <footer className="no-print bg-white border-t border-stone-200 mt-16 py-6 text-center text-[11px] text-stone-500 font-sans">
         <p className="font-semibold text-stone-700">GSAT English Mock Paper Creator • 學測英文模考創建器</p>
-        <p className="mt-1 text-[10px] text-amber-800">Designed by Tr. Shirley Du</p>
-        <p className="mt-2 text-[9px] text-stone-400">© 2026. All rights reserved.</p>
+        <p className="mt-1 text-[10px] text-amber-800 font-medium">Designed by Tr. Shirley Du</p>
+        <p className="mt-2 text-[9px] text-stone-400">© 2026. All rights reserved. Taiwan High School Scholastic Preparation.</p>
       </footer>
     </div>
   );
