@@ -335,7 +335,7 @@ export default function WorksheetExport({ suite, onBack }: WorksheetExportProps)
 
   <script>
     // Embedded exam suite data
-    const EXAM_DATA = ${serializedData};
+    const EXAM_DATA = JSON.parse(decodeURIComponent("${encodeURIComponent(serializedData)}"));
 
     // State object
     let state = {
@@ -750,7 +750,11 @@ export default function WorksheetExport({ suite, onBack }: WorksheetExportProps)
       state.answers[section][questionId] = letter;
       
       // Clear previously selected styling in this question's options
-      const btns = document.querySelectorAll(\`[id^="\${section}-btn-\${questionId}-"]\`);
+      const btns = Array.from(document.querySelectorAll(\`[id^="\${section}-btn-\${questionId}-"]\`))
+        .filter(b => b.id === \`\${section}-btn-\${questionId}-A\` || 
+                     b.id === \`\${section}-btn-\${questionId}-B\` || 
+                     b.id === \`\${section}-btn-\${questionId}-C\` || 
+                     b.id === \`\${section}-btn-\${questionId}-D\`);
       btns.forEach(b => b.classList.remove('choice-selected'));
 
       // Highlight the selected button
