@@ -252,19 +252,8 @@ export default function App() {
         throw new Error("請至少勾選一種想練習或列印的學測大題型！");
       }
 
-      // API Call
-      const response = await fetch("/api/generate", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          vocabList: finalVocabList,
-          selectedExerciseTypes,
-          selectedReadingLevels: selectedExerciseTypes.reading ? selectedReadingLevels : [],
-          selectedLevel,
-        }),
-      });
-
-      if (!response.ok) {
+      // Helper to extract clean errors
+      const getErrorMsg = async (response: Response) => {
         let errorMsg = "";
         try {
           const text = await response.text();
@@ -285,41 +274,96 @@ export default function App() {
         if (response.status === 500 && (!errorMsg || errorMsg.includes("API Configuration Error") || errorMsg.includes("Status: 500") || errorMsg.includes("Internal Server Error"))) {
           errorMsg = "API 金鑰未設定或已失效。請至左上角或右上角 Settings > Secrets 檢查是否設定了『GEMINI_API_KEY』並重新整理。";
         }
+        return errorMsg || "大腦生成模組失敗，請稍後再試。";
+      };
 
-        throw new Error(errorMsg || "大腦生成模組失敗，請稍後再試。");
-      }
+      const finalSuiteData: any = {
+        vocabQuestions: [],
+        readingPassages: []
+      };
 
-      const resData = await response.json();
-      if (resData.success && resData.data) {
-        const suite: GeneratedExamSuite = {
-          ...resData.data,
-          timestamp: Date.now(),
-          metadata: {
-            vocabCount: sourceCount,
-            sourceType: vocabSource,
-            selectedLevel,
-            selectedUnits: vocabSource === "system" ? selectedUnits : ["Self Input"]
-          }
-        };
-        
-        setExamSuite(suite);
-        
-        // Dynamic navigation routing
-        // Open appropriate default tab
-        setSession({
-          answers: { vocab: {}, cloze: {}, blankMatching: {}, reading: {} },
-          submitted: false,
-          startTime: Date.now()
+      // 1. Generate Vocab Questions if checked
+      if (selectedExerciseTypes.vocab) {
+        setLoadingStepMsg("正在為您精心設計學測字彙單選題 (10 題)...");
+        const resVocab = await fetch("/api/generate", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            vocabList: finalVocabList,
+            selectedExerciseTypes: { vocab: true, reading: false },
+            selectedReadingLevels: [],
+            selectedLevel
+          })
         });
 
-        // Set default active section
-        if (suite.vocabQuestions && suite.vocabQuestions.length > 0) setCurrentSection("vocab");
-        else if (suite.readingPassages) setCurrentSection("reading");
+        if (!resVocab.ok) {
+          throw new Error(await getErrorMsg(resVocab));
+        }
 
-        setActiveTab("player");
-      } else {
-        throw new Error("生卷系統響應異常，請重試一遍。");
+        const resData = await resVocab.json();
+        if (resData.success && resData.data && resData.data.vocabQuestions) {
+          finalSuiteData.vocabQuestions = resData.data.vocabQuestions;
+        } else {
+          throw new Error("生成學測字彙題失敗，請重試。");
+        }
       }
+
+      // 2. Generate Reading passages per level if checked
+      if (selectedExerciseTypes.reading && selectedReadingLevels && selectedReadingLevels.length > 0) {
+        for (const lvl of selectedReadingLevels) {
+          const lvlLabel = lvl === "basic" ? "基礎級 (Basic)" : lvl === "essential" ? "核心級 (Essential)" : "進階級 (Advanced)";
+          setLoadingStepMsg(`正在精心撰寫 ${lvlLabel} 閱讀測驗及 4 題多類別題目...`);
+
+          const resReading = await fetch("/api/generate", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              vocabList: finalVocabList,
+              selectedExerciseTypes: { vocab: false, reading: true },
+              selectedReadingLevels: [lvl],
+              selectedLevel
+            })
+          });
+
+          if (!resReading.ok) {
+            throw new Error(await getErrorMsg(resReading));
+          }
+
+          const resData = await resReading.json();
+          if (resData.success && resData.data && resData.data.readingPassages) {
+            finalSuiteData.readingPassages.push(...resData.data.readingPassages);
+          } else {
+            throw new Error(`生成 ${lvlLabel} 閱讀測驗失敗，請重試。`);
+          }
+        }
+      }
+
+      const suite: GeneratedExamSuite = {
+        ...finalSuiteData,
+        timestamp: Date.now(),
+        metadata: {
+          vocabCount: sourceCount,
+          sourceType: vocabSource,
+          selectedLevel,
+          selectedUnits: vocabSource === "system" ? selectedUnits : ["Self Input"]
+        }
+      };
+
+      setExamSuite(suite);
+
+      // Dynamic navigation routing
+      // Open appropriate default tab
+      setSession({
+        answers: { vocab: {}, cloze: {}, blankMatching: {}, reading: {} },
+        submitted: false,
+        startTime: Date.now()
+      });
+
+      // Set default active section
+      if (suite.vocabQuestions && suite.vocabQuestions.length > 0) setCurrentSection("vocab");
+      else if (suite.readingPassages && suite.readingPassages.length > 0) setCurrentSection("reading");
+
+      setActiveTab("player");
     } catch (err: any) {
       console.error(err);
       setGenerationError(err.message || "生卷失敗，請檢查網路連線或稍等後再試。");
