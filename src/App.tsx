@@ -265,8 +265,14 @@ export default function App() {
       });
 
       if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
-        throw new Error(errorData.error || "大腦生成模組失敗，請稍後再試。");
+        let errorMsg = "";
+        try {
+          const errorData = await response.json();
+          errorMsg = errorData.error;
+        } catch (e) {
+          errorMsg = `Status: ${response.status} ${response.statusText}`;
+        }
+        throw new Error(errorMsg || "大腦生成模組失敗，請稍後再試。");
       }
 
       const resData = await response.json();
