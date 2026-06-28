@@ -50,7 +50,6 @@ export default function App() {
   const [selectedUnits, setSelectedUnits] = useState<string[]>([]);
   const [unitSearch, setUnitSearch] = useState<string>("");
   const [unitsDropdownOpen, setUnitsDropdownOpen] = useState<boolean>(false);
-  const [randomWordCount, setRandomWordCount] = useState<number>(20);
 
   // Self-input states
   const [selfInputText, setSelfInputText] = useState<string>(
@@ -222,11 +221,7 @@ export default function App() {
           filteredWords = availableWords.filter(w => selectedUnits.includes(w.unit));
         }
 
-        // Shuffle and pick
-        const shuffled = [...filteredWords].sort(() => 0.5 - Math.random());
-        const selectedSystemSubset = shuffled.slice(0, randomWordCount);
-
-        finalVocabList = selectedSystemSubset.map(w => ({
+        finalVocabList = filteredWords.map(w => ({
           word: w.word,
           pos: w.pos,
           meaning: w.meaning
@@ -679,25 +674,16 @@ export default function App() {
                       </div>
                     </div>
 
-                    {/* Word Sample Count slider */}
+                    {/* Word Sample Count status */}
                     <div className="space-y-1.5 sm:col-span-2 border-t border-stone-100 pt-3 mt-1">
-                      <div className="flex justify-between items-center">
-                        <label className="text-xs font-bold font-sans uppercase text-stone-500 flex items-center gap-1">
-                          No. of Words to Extract (單字提取數量)
-                        </label>
-                        <span className="font-mono text-xs font-bold text-amber-800 bg-amber-50 px-2 py-0.5 rounded">
-                          {randomWordCount} words
-                        </span>
-                      </div>
-                      <input
-                        type="range"
-                        min="5"
-                        max="50"
-                        value={randomWordCount}
-                        onChange={(e) => setRandomWordCount(parseInt(e.target.value))}
-                        className="w-full accent-teal-800 h-1 bg-stone-200 rounded-lg cursor-pointer"
-                        id="word-count-range-slider"
-                      />
+                      <p className="text-xs text-stone-600 font-medium">
+                        <span className="text-amber-800 font-bold">
+                          {selectedUnits.length === 0 
+                            ? availableWords.length 
+                            : availableWords.filter(w => selectedUnits.includes(w.unit)).length} words
+                        </span>{" "}
+                        available from selected units — all will be passed to the AI for question generation.
+                      </p>
                     </div>
 
                   </div>
