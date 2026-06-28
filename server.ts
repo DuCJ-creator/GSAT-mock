@@ -147,7 +147,11 @@ You will generate high-quality interactive exercises based on the vocabulary wor
 Ensure that:
 1. Every generated question and option is 100% grammatically and contextually correct.
    - For vocabulary questions, ensure the blank can only be filled by the correct option, resulting in a natural, idiomatic, and grammatically perfect English sentence.
-   - Crucial grammar rule: Never use the verb "cost" in active voice with a person ("you", "I", "we", "he", etc.) as the subject to mean spending money (e.g., "you need to cost a lot of money" is completely ungrammatical; the correct verb is "spend"). "Cost" must take the item or activity as its subject (e.g., "the phone costs a lot of money").
+   - Crucial Grammar Rules & High-Frequency Pitfalls to avoid:
+     * NEVER use "cost" with a person ("you", "I", "we", "he", "she", etc.) as the subject to mean spending money (e.g., "you need to cost a lot of money" is WRONG; use "spend" or "pay" instead). "Cost" must take the item/activity/trip as its subject (e.g., "The ticket costs a lot of money").
+     * NEVER use "spend" with an item as the subject (e.g., "The ticket spent me 100 dollars" is WRONG; use "cost" instead).
+     * Ensure correct preposition pairings for English verbs (e.g., "spend [time/money] on/in doing something", "pay for something", "charge someone for something").
+     * Check that passive voice, transitive/intransitive classifications, and participle phrases are perfectly grammatical.
    - Carefully verify the syntax, grammar, and naturalness of all options and sentence frames.
 2. Every generated question has no ambiguity. There is exactly one correct answer.
 3. The vocabulary level fits the Taiwan GSAT syllabus (levels 3 to 6).
