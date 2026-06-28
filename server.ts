@@ -105,7 +105,7 @@ app.post("/api/generate", async (req, res) => {
   try {
     const {
       vocabList, // array of VocabWord or custom strings
-      selectedExerciseTypes, // e.g. { vocab: true, cloze: true, blankMatching: true, reading: true }
+      selectedExerciseTypes, // e.g. { vocab: true, reading: true }
       selectedReadingLevels, // e.g. ["basic", "essential", "advanced"]
       selectedLevel, // 1 to 6
     } = req.body;
@@ -124,50 +124,25 @@ app.post("/api/generate", async (req, res) => {
     if (selectedExerciseTypes.vocab) {
       activeSections.push("vocabQuestions");
       sectionsGuidelines += `
-1. "vocabQuestions": Create 10 GSAT-level English vocabulary multiple-choice questions focusing on the provided vocabulary words or suitable GSAT academic words (if not enough vocab).
+1. "vocabQuestions": Create EXACTLY 10 GSAT-level English vocabulary multiple-choice questions focusing on the provided vocabulary words or suitable GSAT academic words (if not enough vocab).
    - Ensure the structure and complexity are aligned with Taiwan's GSAT (General Scholastic Ability Test).
-   - The correct answers MUST be evenly distributed among the options (A), (B), (C), (D) without cluttering.
+   - The correct answers MUST be evenly distributed among the options (A), (B), (C), (D) without clustering.
    - For EACH question, provide exactly four choices, and they must be formatted on a single line prefixing (A), (B), (C), (D).
    - Distractors in the options must not repeat within a question and should be standard high-frequency academic vocabulary.
-   - Provide a detailed Traditional Chinese explanation containing translation and grammar notes.
-`;
-    }
-
-    if (selectedExerciseTypes.cloze) {
-      activeSections.push("clozeSuite");
-      sectionsGuidelines += `
-2. "clozeSuite": Create 1 GSAT-level English cloze passage (綜合測驗) of 150-180 words, containing exactly 5 numbered blanks: (1) to (5).
-   - The blanks must test a comprehensive scope: 1-2 for vocabulary, 1-2 for grammar, collocations, connectives, or idioms.
-   - Each blank must have exactly four multiple-choice options.
-   - Ensure a authentic, engaging passage theme (e.g., historical events, scientific discoveries, psychological findings, culture, or technology).
-   - Correct answers must not cluster on a single option character.
-   - Provide detailed Traditional Chinese explanation for each gap, explaining why it is correct and why other choices are incorrect.
-`;
-    }
-
-    if (selectedExerciseTypes.blankMatching) {
-      activeSections.push("blankMatchingSuite");
-      sectionsGuidelines += `
-3. "blankMatchingSuite": Create 1 GSAT "文意選填" (blank matching / passage completion) containing exactly 10 numbered blanks: (1) to (10).
-   - The passage should be around 200-250 words.
-   - Provide exactly 10 candidate words labeled (A) through (J) to fill in these 10 blanks.
-   - The candidate words must be deceptive (e.g., including pairs of nouns, verbs, adjectives, prepositions, or participles (-ed / -ing forms)).
-   - Each blank must have exactly ONE unique mathematically and grammatically correct option; other options must be highly plausible but strictly incorrect or grammatically invalid.
-   - Maintain perfect traditional scholarly readability.
-   - Provide a clean mapping of blanks 1 to 10 to letters (e.g., ["C", "F", "A"...]) and corresponding Traditional Chinese explanations.
+   - Provide a precise and concise Traditional Chinese explanation containing translation and grammar notes.
 `;
     }
 
     if (selectedExerciseTypes.reading && selectedReadingLevels && selectedReadingLevels.length > 0) {
       activeSections.push("readingPassages");
       sectionsGuidelines += `
-4. "readingPassages": Create reading comprehension passages for the selected levels: ${selectedReadingLevels.join(", ")}.
-   - For EACH selected level, create a distinct, high-quality, interesting passage of 250-300 words.
+2. "readingPassages": Create reading comprehension passages for the selected levels: ${selectedReadingLevels.join(", ")}.
+   - For EACH selected level, create a distinct, high-quality, interesting passage of 200-250 words.
    - Each passage MUST be followed by exactly 4 reading comprehension questions.
    - The questions should test global reading skills (e.g., main idea, detail lookup, tone analysis, context-clue inferring, title selection).
    - The correct answers must be distributed evenly without clustering.
    - Provide 4 options for each question.
-   - Provide complete, detailed Traditional Chinese explanations and translate key sentences.
+   - Provide complete, concise Traditional Chinese explanations and translate key sentences. Keep explanations clear and high-impact.
 `;
     }
 
@@ -196,7 +171,7 @@ Active Sections to generate: ${activeSections.join(", ")}.
 Guidelines for sections to generate:
 ${sectionsGuidelines}
 
-You MUST follow the specified JSON schema strictly. Make sure all strings are correctly closed and the response is clean JSON.`;
+You MUST follow the specified JSON schema strictly. Make sure all strings are correctly closed and the response is clean JSON. Keep explanations concise to ensure fast API responses and prevent serverless timeouts.`;
 
     // Define JSON schema for structured output to ensure 100% parse rate without errors
     const responseSchema: any = {
@@ -228,62 +203,6 @@ You MUST follow the specified JSON schema strictly. Make sure all strings are co
       responseSchema.required.push("vocabQuestions");
     }
 
-    if (selectedExerciseTypes.cloze) {
-      responseSchema.properties.clozeSuite = {
-        type: Type.OBJECT,
-        properties: {
-          passage: { type: Type.STRING, description: "Passage of ~150-180 words, with numbered gaps like (1) __________, (2) __________..." },
-          questions: {
-            type: Type.ARRAY,
-            items: {
-              type: Type.OBJECT,
-              properties: {
-                gapNumber: { type: Type.INTEGER, description: "The number of the blank, 1 to 5" },
-                question: { type: Type.STRING, description: "Which choice is the best fit for gap (gapNumber)?" },
-                options: {
-                  type: Type.ARRAY,
-                  items: { type: Type.STRING },
-                  description: "Exactly 4 option strings, e.g. ['(A) word1', '(B) word2', '(C) word3', '(D) word4']"
-                },
-                correctAnswer: { type: Type.STRING, description: "Must be 'A', 'B', 'C', or 'D'" },
-                category: { type: Type.STRING, description: "One of: vocabulary, grammar, collocation, idiom, discourse" },
-                explanation: { type: Type.STRING, description: "Detailed Traditional Chinese explanation." }
-              },
-              required: ["gapNumber", "question", "options", "correctAnswer", "category", "explanation"]
-            }
-          }
-        },
-        required: ["passage", "questions"]
-      };
-      responseSchema.required.push("clozeSuite");
-    }
-
-    if (selectedExerciseTypes.blankMatching) {
-      responseSchema.properties.blankMatchingSuite = {
-        type: Type.OBJECT,
-        properties: {
-          passage: { type: Type.STRING, description: "A ~200-250 word passage with blanks marked as (1) __________, (2) __________ up to (10) __________." },
-          options: {
-            type: Type.ARRAY,
-            items: { type: Type.STRING },
-            description: "Exactly 10 options, each representing a single vocabulary or phrasal candidate. E.g. ['(A) beneficial', '(B) consistently', '(C) consequence' ...]"
-          },
-          answers: {
-            type: Type.ARRAY,
-            items: { type: Type.STRING },
-            description: "Exactly 10 items representing the answer letter corresponding to gaps 1 to 10. E.g. ['C', 'A', 'J'...]"
-          },
-          explanations: {
-            type: Type.ARRAY,
-            items: { type: Type.STRING },
-            description: "Exactly 10 items, each explaining why that candidate fits that blank in Traditional Chinese."
-          }
-        },
-        required: ["passage", "options", "answers", "explanations"]
-      };
-      responseSchema.required.push("blankMatchingSuite");
-    }
-
     if (selectedExerciseTypes.reading && selectedReadingLevels && selectedReadingLevels.length > 0) {
       responseSchema.properties.readingPassages = {
         type: Type.ARRAY,
@@ -292,7 +211,7 @@ You MUST follow the specified JSON schema strictly. Make sure all strings are co
           properties: {
             level: { type: Type.STRING, description: "Must be one of: basic, essential, advanced" },
             title: { type: Type.STRING, description: "Title of the passage" },
-            passage: { type: Type.STRING, description: "The content passage (~250-300 words)" },
+            passage: { type: Type.STRING, description: "The content passage (~200-250 words)" },
             questions: {
               type: Type.ARRAY,
               description: "Exactly 4 reading comprehension questions",
@@ -381,15 +300,13 @@ You talk in Traditional Chinese (using Taiwan idioms like 衝刺, 奠定基礎, 
 The user's exam performance:
 - Overall Score: ${scoreSummary.comprehensive.correct}/${scoreSummary.comprehensive.total} (Accuracy: ${scoreSummary.comprehensive.score}%)
 - Vocabulary section: ${scoreSummary.vocab.correct}/${scoreSummary.vocab.total}
-- cloze (綜合測驗): ${scoreSummary.cloze.correct}/${scoreSummary.cloze.total}
-- Blank matching (文意選填): ${scoreSummary.blankMatching.correct}/${scoreSummary.blankMatching.total}
 - Reading comprehension: ${scoreSummary.reading.correct}/${scoreSummary.reading.total}
 - Practiced Level: GSAT Level ${selectedLevel || "Mixed"}
 
 Provide:
 1. "greeting": A warm greeting addressing the student's status.
 2. "analysis": A highly professional yet heartening section review of what they did well and where their blindspots/demon-in-the-details are (e.g. grammar collocations vs vocab retention vs reading pacing).
-3. "tips": 3 actionable, highly tactical GSAT English study tips tailored to their score (e.g., if vocabulary is low, advise on memorizing collocation prefixes; if cloze is low, advise parsing transitive verbs or connector transitions).
+3. "tips": 3 actionable, highly tactical GSAT English study tips tailored to their score (e.g., if vocabulary is low, advise on memorizing collocation prefixes; if reading comprehension is low, advise on topic sentence locating, skimming, and clue parsing).
 4. "encouragement": A powerful, inspirational closing quote/sentence designed to boost their spirits for the final GSAT battle!
 
 Keep the response in structured JSON matching this schema:
