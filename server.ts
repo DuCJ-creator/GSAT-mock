@@ -265,6 +265,7 @@ You MUST follow the specified JSON schema strictly. Make sure all strings are co
             passage: { type: Type.STRING, description: "The content passage (~250-300 words)" },
             questions: {
               type: Type.ARRAY,
+              description: "Exactly 4 reading comprehension questions",
               items: {
                 type: Type.OBJECT,
                 properties: {
@@ -448,7 +449,7 @@ async function startServer() {
   });
 }
 
-if (!process.env.VERCEL) {
+if (!process.env.VERCEL && process.env.IS_SERVERLESS !== "true") {
   startServer();
 }
 
