@@ -66,8 +66,38 @@ function verifyApiKeys() {
 // Since the platform runs in a Clound Run container, local memories or standard JSON is great for persistence.
 
 // API endpoints
-app.get("/api/health", (req, res) => {
-  res.json({ status: "ok", message: "GSAT Buffet API is healthy." });
+app.get("/api/health", async (req, res) => {
+  const geminiKeyExists = !!process.env.GEMINI_API_KEY;
+  const openaiKeyExists = !!process.env.OPENAI_API_KEY;
+  let geminiTest = "Not tested";
+  let geminiError = null;
+
+  if (geminiKeyExists) {
+    try {
+      const ai = getGenAI();
+      const response = await ai.models.generateContent({
+        model: "gemini-2.5-flash",
+        contents: "Respond with 'ok'",
+      });
+      geminiTest = response.text || "Empty response";
+    } catch (e: any) {
+      geminiError = e.message || String(e);
+    }
+  }
+
+  res.json({
+    status: "ok",
+    message: "GSAT Buffet API is healthy.",
+    env: {
+      geminiKeyExists,
+      geminiKeyLength: process.env.GEMINI_API_KEY ? process.env.GEMINI_API_KEY.length : 0,
+      openaiKeyExists,
+      openaiKeyLength: process.env.OPENAI_API_KEY ? process.env.OPENAI_API_KEY.length : 0,
+      NODE_ENV: process.env.NODE_ENV,
+    },
+    geminiTest,
+    geminiError,
+  });
 });
 
 // Post endpoint to generate GSAT exercises
