@@ -307,6 +307,7 @@ export default function App() {
           throw new Error("生成學測字彙題失敗，請重試。");
         }
       }
+      console.log("RAW vocab data:", JSON.stringify(resData.data?.vocabQuestions?.[0], null, 2));
 
       // 2. Generate Reading passages per level if checked
       if (selectedExerciseTypes.reading && selectedReadingLevels && selectedReadingLevels.length > 0) {
