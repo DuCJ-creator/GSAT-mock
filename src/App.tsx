@@ -281,7 +281,20 @@ export default function App() {
         vocabQuestions: [],
         readingPassages: []
       };
-
+// Normalize options to always be arrays
+const normalizeOptions = (opts: any): string[] => {
+  let arr: string[] = [];
+  if (Array.isArray(opts)) arr = opts;
+  else if (opts && typeof opts === "object") arr = Object.values(opts);
+  else return ["(A)", "(B)", "(C)", "(D)"];
+  
+  // If options don't already have (A)/(B) prefix, add them
+  return arr.map((opt, idx) => {
+    const letter = ["A", "B", "C", "D"][idx];
+    const s = String(opt).trim();
+    return s.startsWith(`(${letter})`) ? s : `(${letter}) ${s}`;
+  });
+};
       // 1. Generate Vocab Questions if checked
       if (selectedExerciseTypes.vocab) {
         setLoadingStepMsg("正在為您精心設計學測字彙單選題 (10 題)...");
@@ -301,13 +314,16 @@ export default function App() {
         }
 
         const resData = await resVocab.json();
-        if (resData.success && resData.data && resData.data.vocabQuestions) {
-          finalSuiteData.vocabQuestions = resData.data.vocabQuestions;
-        } else {
-          throw new Error("生成學測字彙題失敗，請重試。");
-        }
+       if (resData.success && resData.data && resData.data.vocabQuestions) {
+  finalSuiteData.vocabQuestions = resData.data.vocabQuestions.map((q: any) => ({
+    ...q,
+    options: normalizeOptions(q.options)
+  }));
+} else {
+  throw new Error("生成學測字彙題失敗，請重試。");
+}
       }
-      console.log("RAW vocab data:", JSON.stringify(resData.data?.vocabQuestions?.[0], null, 2));
+
 
       // 2. Generate Reading passages per level if checked
       if (selectedExerciseTypes.reading && selectedReadingLevels && selectedReadingLevels.length > 0) {
@@ -339,20 +355,6 @@ if (resData.success && resData.data && resData.data.readingPassages) {
 }
         }
       }
-// Normalize options to always be arrays
-const normalizeOptions = (opts: any): string[] => {
-  let arr: string[] = [];
-  if (Array.isArray(opts)) arr = opts;
-  else if (opts && typeof opts === "object") arr = Object.values(opts);
-  else return ["(A)", "(B)", "(C)", "(D)"];
-  
-  // If options don't already have (A)/(B) prefix, add them
-  return arr.map((opt, idx) => {
-    const letter = ["A", "B", "C", "D"][idx];
-    const s = String(opt).trim();
-    return s.startsWith(`(${letter})`) ? s : `(${letter}) ${s}`;
-  });
-};
 
 if (finalSuiteData.readingPassages) {
   finalSuiteData.readingPassages = finalSuiteData.readingPassages.map((p: any) => ({
