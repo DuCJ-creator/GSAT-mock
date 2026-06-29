@@ -337,7 +337,29 @@ export default function App() {
           }
         }
       }
+// Normalize options to always be arrays
+const normalizeOptions = (opts: any): string[] => {
+  if (Array.isArray(opts)) return opts;
+  if (opts && typeof opts === "object") return Object.values(opts);
+  return [];
+};
 
+if (finalSuiteData.vocabQuestions) {
+  finalSuiteData.vocabQuestions = finalSuiteData.vocabQuestions.map((q: any) => ({
+    ...q,
+    options: normalizeOptions(q.options)
+  }));
+}
+
+if (finalSuiteData.readingPassages) {
+  finalSuiteData.readingPassages = finalSuiteData.readingPassages.map((p: any) => ({
+    ...p,
+    questions: p.questions.map((q: any) => ({
+      ...q,
+      options: normalizeOptions(q.options)
+    }))
+  }));
+}
       const suite: GeneratedExamSuite = {
         ...finalSuiteData,
         timestamp: Date.now(),
