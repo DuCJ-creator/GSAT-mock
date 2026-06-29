@@ -330,11 +330,12 @@ export default function App() {
           }
 
           const resData = await resReading.json();
-          if (resData.success && resData.data && resData.data.readingPassages) {
-            finalSuiteData.readingPassages.push(...resData.data.readingPassages);
-          } else {
-            throw new Error(`生成 ${lvlLabel} 閱讀測驗失敗，請重試。`);
-          }
+if (resData.success && resData.data && resData.data.readingPassages) {
+  // Take only the first passage per level call
+  finalSuiteData.readingPassages.push(resData.data.readingPassages[0]);
+} else {
+  throw new Error(`生成 ${lvlLabel} 閱讀測驗失敗，請重試。`);
+}
         }
       }
 // Normalize options to always be arrays
