@@ -137,6 +137,8 @@ app.post("/api/generate", async (req, res) => {
       activeSections.push("readingPassages");
 sectionsGuidelines += `
 2. "readingPassages": Create EXACTLY ONE reading comprehension passage for the level: ${selectedReadingLevels.join(", ")}.
+   - CRITICAL: The passage text MUST be written in English only. Do NOT write passages in Chinese or any other language.
+   - The passage must be appropriate for Taiwan GSAT (學測) English exam.
    - Create ONLY 1 passage total. Do NOT create multiple passages.
    - The single passage MUST be 200-250 words.
    - It MUST be followed by EXACTLY 4 questions.
