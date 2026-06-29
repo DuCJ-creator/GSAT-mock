@@ -21,7 +21,6 @@ app.use(express.json({ limit: "20mb" }));
 
 const PORT = 3000;
 
-// Lazy-initialized Gemini client to prevent app crash on startup
 let aiInstance: GoogleGenAI | null = null;
 function getGenAI(): GoogleGenAI {
   if (!aiInstance) {
@@ -41,7 +40,6 @@ function getGenAI(): GoogleGenAI {
   return aiInstance;
 }
 
-// Lazy-initialized OpenAI client to prevent app crash on startup
 let openaiInstance: OpenAI | null = null;
 function getOpenAI(): OpenAI {
   if (!openaiInstance) {
@@ -62,10 +60,6 @@ function verifyApiKeys() {
   }
 }
 
-// Ensure database/JSON directory exists or is mocked locally in memory
-// Since the platform runs in a Clound Run container, local memories or standard JSON is great for persistence.
-
-// API endpoints
 app.get("/api/health", async (req, res) => {
   const geminiKeyExists = !!process.env.GEMINI_API_KEY;
   const openaiKeyExists = !!process.env.OPENAI_API_KEY;
@@ -100,24 +94,21 @@ app.get("/api/health", async (req, res) => {
   });
 });
 
-// Post endpoint to generate GSAT exercises
 app.post("/api/generate", async (req, res) => {
   try {
     const {
-      vocabList, // array of VocabWord or custom strings
-      selectedExerciseTypes, // e.g. { vocab: true, reading: true }
-      selectedReadingLevels, // e.g. ["basic", "essential", "advanced"]
-      selectedLevel, // 1 to 6
+      vocabList,
+      selectedExerciseTypes,
+      selectedReadingLevels,
+      selectedLevel,
     } = req.body;
 
     verifyApiKeys();
 
-    // Prepare dynamic list of vocabulary words to guide generation
-    const vocabString = vocabList && vocabList.length > 0 
+    const vocabString = vocabList && vocabList.length > 0
       ? vocabList.map((vw: any) => `Word: "${vw.word}" (POS: ${vw.pos || "unspecified"}, meaning: ${vw.meaning || ""})`).join("\n")
       : "use standard GSAT Level 3-6 academic vocabulary.";
 
-    // Construct prompt based on checked sections
     let sectionsGuidelines = "";
     const activeSections: string[] = [];
 
@@ -135,7 +126,7 @@ app.post("/api/generate", async (req, res) => {
 
     if (selectedExerciseTypes.reading && selectedReadingLevels && selectedReadingLevels.length > 0) {
       activeSections.push("readingPassages");
-sectionsGuidelines += `
+      sectionsGuidelines += `
 2. "readingPassages": Create EXACTLY ONE reading comprehension passage for the level: ${selectedReadingLevels.join(", ")}.
    - CRITICAL: The passage text MUST be written in English only. Do NOT write passages in Chinese or any other language.
    - The passage must be appropriate for Taiwan GSAT (學測) English exam.
@@ -144,7 +135,7 @@ sectionsGuidelines += `
    - It MUST be followed by EXACTLY 4 questions.
    - The questions should test global reading skills (e.g., main idea, detail lookup, tone analysis, context-clue inferring, title selection).
    - The correct answers must be distributed evenly without clustering.
-   - Provide 4 options for each question.
+   - Provide 4 options for each question, each prefixed with (A), (B), (C), (D).
    - Provide complete, concise Traditional Chinese explanations and translate key sentences. Keep explanations clear and high-impact.
 `;
     }
@@ -156,15 +147,16 @@ Ensure that:
 1. Every generated question and option is 100% grammatically and contextually correct.
    - For vocabulary questions, ensure the blank can only be filled by the correct option, resulting in a natural, idiomatic, and grammatically perfect English sentence.
    - Crucial Grammar Rules & High-Frequency Pitfalls to avoid:
-     * NEVER use "cost" with a person ("you", "I", "we", "he", "she", etc.) as the subject to mean spending money (e.g., "you need to cost a lot of money" is WRONG; use "spend" or "pay" instead). "Cost" must take the item/activity/trip as its subject (e.g., "The ticket costs a lot of money").
-     * NEVER use "spend" with an item as the subject (e.g., "The ticket spent me 100 dollars" is WRONG; use "cost" instead).
-     * Ensure correct preposition pairings for English verbs (e.g., "spend [time/money] on/in doing something", "pay for something", "charge someone for something").
+     * NEVER use "cost" with a person as the subject to mean spending money. "Cost" must take the item/activity/trip as its subject.
+     * NEVER use "spend" with an item as the subject.
+     * Ensure correct preposition pairings for English verbs.
      * Check that passive voice, transitive/intransitive classifications, and participle phrases are perfectly grammatical.
    - Carefully verify the syntax, grammar, and naturalness of all options and sentence frames.
 2. Every generated question has no ambiguity. There is exactly one correct answer.
 3. The vocabulary level fits the Taiwan GSAT syllabus (levels 3 to 6).
-4. The explanations are written in elegant Traditional Chinese (繁體中文) following the Taiwanese teaching style, with rich analyses of grammar, vocabulary collocations, and translation.
-5. Correct answers are balanced among choices (A, B, C, D) without clustering.`;
+4. The explanations are written in elegant Traditional Chinese (繁體中文) following the Taiwanese teaching style.
+5. Correct answers are balanced among choices (A, B, C, D) without clustering.
+6. ALL passage text must be in English only. Never write passages in Chinese.`;
 
     const instructionsPrompt = `Please generate the requested GSAT exam exercises based on the following input vocabulary:
 ${vocabString}
@@ -176,7 +168,6 @@ ${sectionsGuidelines}
 
 You MUST follow the specified JSON schema strictly. Make sure all strings are correctly closed and the response is clean JSON. Keep explanations concise to ensure fast API responses and prevent serverless timeouts.`;
 
-    // Define JSON schema for structured output to ensure 100% parse rate without errors
     const responseSchema: any = {
       type: Type.OBJECT,
       properties: {},
@@ -194,7 +185,7 @@ You MUST follow the specified JSON schema strictly. Make sure all strings are co
             options: {
               type: Type.ARRAY,
               items: { type: Type.STRING },
-              description: "Exactly 4 options, formatted in a single line style. E.g. ['(A) alleviate', '(B) exaggerate', '(C) devastate', '(D) initiate']"
+              description: "Exactly 4 options, each prefixed with (A), (B), (C), (D). E.g. ['(A) alleviate', '(B) exaggerate', '(C) devastate', '(D) initiate']"
             },
             correctAnswer: { type: Type.STRING, description: "Must be 'A', 'B', 'C', or 'D'" },
             wordTested: { type: Type.STRING, description: "The target word tested" },
@@ -213,8 +204,8 @@ You MUST follow the specified JSON schema strictly. Make sure all strings are co
           type: Type.OBJECT,
           properties: {
             level: { type: Type.STRING, description: "Must be one of: basic, essential, advanced" },
-            title: { type: Type.STRING, description: "Title of the passage" },
-            passage: { type: Type.STRING, description: "The content passage (~200-250 words)" },
+            title: { type: Type.STRING, description: "Title of the passage in English" },
+            passage: { type: Type.STRING, description: "The English content passage (~200-250 words). MUST be in English only." },
             questions: {
               type: Type.ARRAY,
               description: "Exactly 4 reading comprehension questions",
@@ -222,11 +213,11 @@ You MUST follow the specified JSON schema strictly. Make sure all strings are co
                 type: Type.OBJECT,
                 properties: {
                   id: { type: Type.STRING },
-                  question: { type: Type.STRING, description: "GSAT-level comprehension question" },
+                  question: { type: Type.STRING, description: "GSAT-level comprehension question in English" },
                   options: {
                     type: Type.ARRAY,
                     items: { type: Type.STRING },
-                    description: "Exactly 4 options, displayed in separate lines, e.g. ['(A) opt1', '(B) opt2', '(C) opt3', '(D) opt4']"
+                    description: "Exactly 4 options each prefixed with (A), (B), (C), (D). e.g. ['(A) opt1', '(B) opt2', '(C) opt3', '(D) opt4']"
                   },
                   correctAnswer: { type: Type.STRING, description: "Must be 'A', 'B', 'C', or 'D'" },
                   explanation: { type: Type.STRING, description: "Traditional Chinese detailed analysis of logic, clue tracking, and overall meaning." }
@@ -241,7 +232,6 @@ You MUST follow the specified JSON schema strictly. Make sure all strings are co
       responseSchema.required.push("readingPassages");
     }
 
-    // Call AI Model (OpenAI or Gemini depending on key availability)
     let outputText = "";
     if (process.env.OPENAI_API_KEY) {
       const openai = getOpenAI();
@@ -250,7 +240,7 @@ You MUST follow the specified JSON schema strictly. Make sure all strings are co
         model,
         messages: [
           { role: "system", content: systemPrompt },
-          { role: "user", content: instructionsPrompt + "\n\nCRITICAL: You MUST return a single valid JSON object containing only the requested properties." }
+          { role: "user", content: instructionsPrompt + "\n\nCRITICAL: You MUST return a single valid JSON object containing only the requested properties. All passage and question text must be in English." }
         ],
         response_format: { type: "json_object" },
         temperature: 0.7,
@@ -289,7 +279,6 @@ You MUST follow the specified JSON schema strictly. Make sure all strings are co
   }
 });
 
-// Post endpoint to evaluate and generate dynamic commentary report from Tr. Shirley Du
 app.post("/api/evaluate-report", async (req, res) => {
   try {
     const { scoreSummary, details, selectedLevel } = req.body;
@@ -308,8 +297,8 @@ The user's exam performance:
 
 Provide:
 1. "greeting": A warm greeting addressing the student's status.
-2. "analysis": A highly professional yet heartening section review of what they did well and where their blindspots/demon-in-the-details are (e.g. grammar collocations vs vocab retention vs reading pacing).
-3. "tips": 3 actionable, highly tactical GSAT English study tips tailored to their score (e.g., if vocabulary is low, advise on memorizing collocation prefixes; if reading comprehension is low, advise on topic sentence locating, skimming, and clue parsing).
+2. "analysis": A highly professional yet heartening section review of what they did well and where their blindspots/demon-in-the-details are.
+3. "tips": 3 actionable, highly tactical GSAT English study tips tailored to their score.
 4. "encouragement": A powerful, inspirational closing quote/sentence designed to boost their spirits for the final GSAT battle!
 
 Keep the response in structured JSON matching this schema:
@@ -347,9 +336,9 @@ Keep the response in structured JSON matching this schema:
             properties: {
               greeting: { type: Type.STRING },
               analysis: { type: Type.STRING },
-              tips: { 
-                type: Type.ARRAY, 
-                items: { type: Type.STRING } 
+              tips: {
+                type: Type.ARRAY,
+                items: { type: Type.STRING }
               },
               encouragement: { type: Type.STRING }
             },
@@ -360,6 +349,7 @@ Keep the response in structured JSON matching this schema:
       });
       outputText = response.text || "";
     }
+
     if (!outputText) {
       throw new Error("No response received from evaluation model.");
     }
@@ -378,7 +368,6 @@ Keep the response in structured JSON matching this schema:
   }
 });
 
-// Setup Vite Dev server or production static distribution
 async function startServer() {
   if (process.env.NODE_ENV !== "production") {
     const { createServer: createViteServer } = await import("vite");
