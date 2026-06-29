@@ -256,7 +256,7 @@ You MUST follow the specified JSON schema strictly. Make sure all strings are co
     } else {
       const ai = getGenAI();
       const response = await ai.models.generateContent({
-        model: "gemini-3.5-flash",
+        model: "gemini-2.5-flash",
         contents: instructionsPrompt,
         config: {
           systemInstruction: systemPrompt,
@@ -334,7 +334,7 @@ Keep the response in structured JSON matching this schema:
     } else {
       const ai = getGenAI();
       const response = await ai.models.generateContent({
-        model: "gemini-3.5-flash",
+        model: "gemini-2.5-flash",
         contents: userPrompt,
         config: {
           systemInstruction: systemPrompt,
