@@ -42,7 +42,6 @@ const REASSURING_MESSAGES = [
 export default function App() {
   const [activeTab, setActiveTab] = useState<"lobby" | "player" | "worksheet" | "report">("lobby");
   
-  // Custom Vocab mode state ("system" or "self")
   const [vocabSource, setVocabSource] = useState<"system" | "self-input">("system");
   const [selectedLevel, setSelectedLevel] = useState<number>(4);
   const [availableWords, setAvailableWords] = useState<VocabWord[]>([]);
@@ -51,26 +50,22 @@ export default function App() {
   const [unitSearch, setUnitSearch] = useState<string>("");
   const [unitsDropdownOpen, setUnitsDropdownOpen] = useState<boolean>(false);
 
-  // Self-input states
   const [selfInputText, setSelfInputText] = useState<string>(
     "accommodate v.\nvital adj.\nsystem n.\nalleviate v.\ncomprehensive adj.\ncoincide v.\ndevastate v.\nexaggerate v.\npersistent adj.\nversatile adj."
   );
   const [selfInputError, setSelfInputError] = useState<string | null>(null);
 
-  // Exercise checklist states
   const [selectedExerciseTypes, setSelectedExerciseTypes] = useState({
     vocab: true,
     reading: true
   });
-  const [selectedReadingLevels, setSelectedReadingLevels] = useState<string[]>(["basic", "essential", "advanced"]); // "basic", "essential", "advanced"
+  const [selectedReadingLevels, setSelectedReadingLevels] = useState<string[]>(["basic", "essential", "advanced"]);
 
-  // Generated Suite and Player states
   const [examSuite, setExamSuite] = useState<GeneratedExamSuite | null>(null);
   const [generationLoading, setGenerationLoading] = useState<boolean>(false);
   const [loadingStepMsg, setLoadingStepMsg] = useState<string>("");
   const [generationError, setGenerationError] = useState<string | null>(null);
 
-  // Playback timer & interactive answers
   const [session, setSession] = useState<PracticeSessionState>({
     answers: { vocab: {}, cloze: {}, blankMatching: {}, reading: {} },
     submitted: false,
@@ -78,11 +73,9 @@ export default function App() {
   });
   const [currentSection, setCurrentSection] = useState<"vocab" | "cloze" | "matching" | "reading">("vocab");
 
-  // Study History
   const [studyHistory, setStudyHistory] = useState<ProgressReport[]>([]);
   const [activeReport, setActiveReport] = useState<ProgressReport | null>(null);
 
-  // Reassuring animated interval during API loads
   useEffect(() => {
     let interval: NodeJS.Timeout;
     if (generationLoading) {
@@ -96,14 +89,12 @@ export default function App() {
     return () => clearInterval(interval);
   }, [generationLoading]);
 
-  // Load CSV words on system-level changes
   useEffect(() => {
     if (vocabSource === "system") {
       loadSystemWords(selectedLevel);
     }
   }, [selectedLevel, vocabSource]);
 
-  // Load history from localStorage on startup
   useEffect(() => {
     try {
       const saved = localStorage.getItem("gsat_buffet_history");
@@ -120,7 +111,6 @@ export default function App() {
     try {
       const words = await fetchAndParseCSV(level);
       setAvailableWords(words);
-      // Auto-select first 3 unique units initially to make it easy for students
       const uniqueUnits = Array.from(new Set<string>(words.map(w => w.unit))).sort((a: string, b: string) => parseInt(a) - parseInt(b));
       setSelectedUnits(uniqueUnits.slice(0, 3));
     } catch (err) {
@@ -130,7 +120,6 @@ export default function App() {
     }
   };
 
-  // Helper to parse self-input lists line-by-line (one line per word, POS is optional, meaning is optional)
   const parseSelfInputList = (): { word: string; pos?: string; meaning?: string }[] => {
     const list: { word: string; pos?: string; meaning?: string }[] = [];
     const lines = selfInputText.split("\n");
@@ -139,7 +128,6 @@ export default function App() {
       const cleanLine = line.trim();
       if (!cleanLine) continue;
 
-      // Match common POS symbols like v., adj., n., adv., prep., etc. with or without dots or parens
       const posRegex = /\b(v|adj|n|adv|prep|pron|conj|v\.|adj\.|n\.|adv\.|prep\.|pron\.|conj\.)\b|(?:\((v|adj|n|adv|prep|pron|conj|v\.|adj\.|n\.|adv\.|prep\.|pron\.|conj\.)\))/i;
       const matchPos = cleanLine.match(posRegex);
       
@@ -165,7 +153,6 @@ export default function App() {
           word = cleanLine.substring(0, delimMatch.index).trim();
           remaining = cleanLine.substring(delimMatch.index + 1).trim();
         } else {
-          // Check if first token or consecutive english tokens represent the word
           const tokens = cleanLine.split(/\s+/);
           let englishTokens: string[] = [];
           let otherTokens: string[] = [];
@@ -204,6 +191,20 @@ export default function App() {
     return list;
   };
 
+  // Normalize options to always be arrays with (A)/(B)/(C)/(D) prefixes
+  const normalizeOptions = (opts: any): string[] => {
+    let arr: string[] = [];
+    if (Array.isArray(opts)) arr = opts;
+    else if (opts && typeof opts === "object") arr = Object.values(opts);
+    else return ["(A)", "(B)", "(C)", "(D)"];
+
+    return arr.map((opt, idx) => {
+      const letter = ["A", "B", "C", "D"][idx];
+      const s = String(opt).trim();
+      return s.startsWith(`(${letter})`) ? s : `(${letter}) ${s}`;
+    });
+  };
+
   const handleGenerateExam = async () => {
     setGenerationError(null);
     setGenerationLoading(true);
@@ -213,7 +214,6 @@ export default function App() {
       let sourceCount = 0;
 
       if (vocabSource === "system") {
-        // Filter elements based on selected units
         let filteredWords = availableWords;
         if (selectedUnits.length > 0) {
           filteredWords = availableWords.filter(w => selectedUnits.includes(w.unit));
@@ -226,13 +226,11 @@ export default function App() {
         }));
         sourceCount = finalVocabList.length;
       } else {
-        // self-input
         const list = parseSelfInputList();
         if (list.length === 0) {
           throw new Error("請先在自主輸入區塊輸入單字列表喔！");
         }
         
-        // Pad with system words if list is less than 12
         if (list.length < 12) {
           const padded = await padVocabularyIfNecessary(list, selectedLevel, 12);
           finalVocabList = padded;
@@ -246,13 +244,11 @@ export default function App() {
         throw new Error("找不到可用的單字。請嘗試重選字表級別或檢查輸入。");
       }
 
-      // Keep user checklist validated: must select at least one exercise type
       const hasAnySelected = Object.values(selectedExerciseTypes).some(v => v === true);
       if (!hasAnySelected) {
         throw new Error("請至少勾選一種想練習或列印的學測大題型！");
       }
 
-      // Helper to extract clean errors
       const getErrorMsg = async (response: Response) => {
         let errorMsg = "";
         try {
@@ -281,20 +277,7 @@ export default function App() {
         vocabQuestions: [],
         readingPassages: []
       };
-// Normalize options to always be arrays
-const normalizeOptions = (opts: any): string[] => {
-  let arr: string[] = [];
-  if (Array.isArray(opts)) arr = opts;
-  else if (opts && typeof opts === "object") arr = Object.values(opts);
-  else return ["(A)", "(B)", "(C)", "(D)"];
-  
-  // If options don't already have (A)/(B) prefix, add them
-  return arr.map((opt, idx) => {
-    const letter = ["A", "B", "C", "D"][idx];
-    const s = String(opt).trim();
-    return s.startsWith(`(${letter})`) ? s : `(${letter}) ${s}`;
-  });
-};
+
       // 1. Generate Vocab Questions if checked
       if (selectedExerciseTypes.vocab) {
         setLoadingStepMsg("正在為您精心設計學測字彙單選題 (10 題)...");
@@ -313,17 +296,16 @@ const normalizeOptions = (opts: any): string[] => {
           throw new Error(await getErrorMsg(resVocab));
         }
 
-        const resData = await resVocab.json();
-       if (resData.success && resData.data && resData.data.vocabQuestions) {
-  finalSuiteData.vocabQuestions = resData.data.vocabQuestions.map((q: any) => ({
-    ...q,
-    options: normalizeOptions(q.options)
-  }));
-} else {
-  throw new Error("生成學測字彙題失敗，請重試。");
-}
+        const resVocabData = await resVocab.json();
+        if (resVocabData.success && resVocabData.data && resVocabData.data.vocabQuestions) {
+          finalSuiteData.vocabQuestions = resVocabData.data.vocabQuestions.map((q: any) => ({
+            ...q,
+            options: normalizeOptions(q.options)
+          }));
+        } else {
+          throw new Error("生成學測字彙題失敗，請重試。");
+        }
       }
-
 
       // 2. Generate Reading passages per level if checked
       if (selectedExerciseTypes.reading && selectedReadingLevels && selectedReadingLevels.length > 0) {
@@ -346,25 +328,33 @@ const normalizeOptions = (opts: any): string[] => {
             throw new Error(await getErrorMsg(resReading));
           }
 
-          const resData = await resReading.json();
-if (resData.success && resData.data && resData.data.readingPassages) {
-  // Take only the first passage per level call
-  finalSuiteData.readingPassages.push(resData.data.readingPassages[0]);
-} else {
-  throw new Error(`生成 ${lvlLabel} 閱讀測驗失敗，請重試。`);
-}
+          const resReadingData = await resReading.json();
+          if (resReadingData.success && resReadingData.data) {
+            const passages = resReadingData.data.readingPassages;
+            if (passages && passages.length > 0 && passages[0]) {
+              finalSuiteData.readingPassages.push(passages[0]);
+            } else {
+              throw new Error(`生成 ${lvlLabel} 閱讀測驗失敗，請重試。`);
+            }
+          } else {
+            throw new Error(resReadingData.error || `生成 ${lvlLabel} 閱讀測驗失敗，請重試。`);
+          }
         }
       }
 
-if (finalSuiteData.readingPassages) {
-  finalSuiteData.readingPassages = finalSuiteData.readingPassages.map((p: any) => ({
-    ...p,
-    questions: p.questions.map((q: any) => ({
-      ...q,
-      options: normalizeOptions(q.options)
-    }))
-  }));
-}
+      // Normalize reading options and filter out any malformed passages
+      if (finalSuiteData.readingPassages) {
+        finalSuiteData.readingPassages = finalSuiteData.readingPassages
+          .filter((p: any) => p && p.questions && Array.isArray(p.questions))
+          .map((p: any) => ({
+            ...p,
+            questions: p.questions.map((q: any) => ({
+              ...q,
+              options: normalizeOptions(q.options)
+            }))
+          }));
+      }
+
       const suite: GeneratedExamSuite = {
         ...finalSuiteData,
         timestamp: Date.now(),
@@ -378,15 +368,12 @@ if (finalSuiteData.readingPassages) {
 
       setExamSuite(suite);
 
-      // Dynamic navigation routing
-      // Open appropriate default tab
       setSession({
         answers: { vocab: {}, cloze: {}, blankMatching: {}, reading: {} },
         submitted: false,
         startTime: Date.now()
       });
 
-      // Set default active section
       if (suite.vocabQuestions && suite.vocabQuestions.length > 0) setCurrentSection("vocab");
       else if (suite.readingPassages && suite.readingPassages.length > 0) setCurrentSection("reading");
 
@@ -402,7 +389,6 @@ if (finalSuiteData.readingPassages) {
   const handleInteractiveSubmitAnswers = async () => {
     if (!examSuite) return;
 
-    // Evaluate answers
     const reportDetails: any[] = [];
     const summary = {
       vocab: { correct: 0, total: 0, score: 0 },
@@ -412,7 +398,6 @@ if (finalSuiteData.readingPassages) {
       comprehensive: { correct: 0, total: 0, score: 0 }
     };
 
-    // 1. Vocab MCQ Audit
     if (examSuite.vocabQuestions) {
       examSuite.vocabQuestions.forEach((q) => {
         const userAns = session.answers.vocab[q.id] || "";
@@ -432,7 +417,6 @@ if (finalSuiteData.readingPassages) {
       summary.vocab.score = summary.vocab.total > 0 ? Math.round((summary.vocab.correct / summary.vocab.total) * 100) : 0;
     }
 
-    // 4. Reading MCQ Audit
     if (examSuite.readingPassages) {
       examSuite.readingPassages.forEach((p, pIdx) => {
         p.questions.forEach((q, qIdx) => {
@@ -455,7 +439,6 @@ if (finalSuiteData.readingPassages) {
       summary.reading.score = summary.reading.total > 0 ? Math.round((summary.reading.correct / summary.reading.total) * 100) : 0;
     }
 
-    // Form comprehensive final scorecard
     const totalCorrect = summary.vocab.correct + summary.reading.correct;
     const totalQuestions = summary.vocab.total + summary.reading.total;
     summary.comprehensive = {
@@ -477,8 +460,7 @@ if (finalSuiteData.readingPassages) {
 
     setActiveReport(report);
 
-    // Save and cache to past history
-    const updatedHistory = [report, ...studyHistory].slice(0, 50); // limit 50 logs safely
+    const updatedHistory = [report, ...studyHistory].slice(0, 50);
     setStudyHistory(updatedHistory);
     try {
       localStorage.setItem("gsat_buffet_history", JSON.stringify(updatedHistory));
@@ -486,7 +468,6 @@ if (finalSuiteData.readingPassages) {
       console.error(e);
     }
 
-    // Set interactive view state as submitted
     setSession(prev => ({
       ...prev,
       submitted: true,
@@ -503,7 +484,6 @@ if (finalSuiteData.readingPassages) {
     }
   };
 
-  // Extract list of unique units from available words (system mode)
   const uniqueUnits = Array.from(new Set<string>(availableWords.map(w => w.unit)))
     .sort((a: string, b: string) => parseInt(a) - parseInt(b));
 
@@ -513,7 +493,6 @@ if (finalSuiteData.readingPassages) {
 
   return (
     <div className="min-h-screen flex flex-col font-sans bg-[#FBFBFA]">
-      {/* Visual Navigation Header - Hidden on prints automatically */}
       <header className="no-print bg-white border-b border-stone-200/80 sticky top-0 z-50 shadow-xs transition duration-200">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-3.5 flex flex-col md:flex-row md:items-center justify-between gap-4">
           <div className="flex items-center gap-3.5 cursor-pointer select-none" onClick={() => setActiveTab("lobby")}>
@@ -580,17 +559,12 @@ if (finalSuiteData.readingPassages) {
         </div>
       </header>
 
-      {/* Main Dynamic Workspace Area */}
       <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8">
         
-        {/* LOBBY / SETUP SCREEN */}
         {activeTab === "lobby" && (
           <div className="space-y-8 animate-fade-in" id="lobby-panel">
-
-            {/* Config Box and Options */}
             <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
               
-              {/* Left Column: Vocabulary feed and checklist (8 cols) */}
               <div className="lg:col-span-8 bg-white border border-stone-200/90 rounded-2xl p-6 md:p-8 shadow-xs space-y-6">
                 <div className="border-b border-stone-150 pb-4">
                   <h3 className="text-lg font-bold font-display text-stone-900 flex items-center gap-2">
@@ -600,7 +574,6 @@ if (finalSuiteData.readingPassages) {
                   <p className="text-xs text-stone-500 mt-1">Select the core target vocabulary levels/units, or paste your custom word list. / 選定本測驗的核心字表字級、篩選單元，或直接自主貼上自訂單字表。</p>
                 </div>
 
-                {/* Vocabulary Source Mode Selectors */}
                 <div className="grid grid-cols-2 gap-3 p-1.5 bg-stone-100 rounded-xl" id="vocab-source-container">
                   <button
                     onClick={() => setVocabSource("system")}
@@ -626,11 +599,8 @@ if (finalSuiteData.readingPassages) {
                   </button>
                 </div>
 
-                {/* Vocabulary Mode Configuration Panel */}
                 {vocabSource === "system" ? (
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 bg-stone-50/50 p-4 rounded-xl border border-stone-100">
-                    
-                    {/* Level Select */}
                     <div className="space-y-1.5" id="level-select-container">
                       <label className="text-xs font-bold font-sans uppercase text-stone-500 flex items-center gap-1">
                         Syllabus Level (篩選學測字級)
@@ -650,7 +620,6 @@ if (finalSuiteData.readingPassages) {
                       </select>
                     </div>
 
-                    {/* Multi Units Select dropdown popover */}
                     <div className="space-y-1.5 relative" id="unit-select-container">
                       <label className="text-xs font-bold font-sans uppercase text-stone-500">
                         Filter Units (篩選單元)
@@ -721,7 +690,6 @@ if (finalSuiteData.readingPassages) {
                       </div>
                     </div>
 
-                    {/* Word Sample Count status */}
                     <div className="space-y-1.5 sm:col-span-2 border-t border-stone-100 pt-3 mt-1">
                       <p className="text-xs text-stone-600 font-medium">
                         <span className="text-amber-800 font-bold">
@@ -732,7 +700,6 @@ if (finalSuiteData.readingPassages) {
                         available from selected units — all will be passed to the AI for question generation.
                       </p>
                     </div>
-
                   </div>
                 ) : (
                   <div className="space-y-2 bg-stone-50/50 p-4 rounded-xl border border-stone-100" id="self-input-container">
@@ -762,7 +729,6 @@ if (finalSuiteData.readingPassages) {
                   </div>
                 )}
 
-                {/* EXERCISE TYPES CONFIGURATION CHECKLIST */}
                 <div className="border-t border-stone-150 pt-6 space-y-4">
                   <div className="pb-1">
                     <h3 className="text-md font-bold font-display text-stone-900 flex items-center gap-2">
@@ -773,7 +739,6 @@ if (finalSuiteData.readingPassages) {
                   </div>
 
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4" id="quiz-types-checklist">
-                    {/* 1. Vocab MCQ */}
                     <label className={`border rounded-xl p-4 flex items-center gap-3 cursor-pointer transition ${
                       selectedExerciseTypes.vocab 
                         ? "border-teal-400 bg-teal-50/20" 
@@ -791,7 +756,6 @@ if (finalSuiteData.readingPassages) {
                       </span>
                     </label>
 
-                    {/* 4. Reading Comprehension */}
                     <div className={`border rounded-xl p-4 space-y-3 transition ${
                       selectedExerciseTypes.reading 
                         ? "border-teal-400 bg-teal-50/20" 
@@ -842,7 +806,6 @@ if (finalSuiteData.readingPassages) {
                   </div>
                 </div>
 
-                {/* INITIATOR TRIGGER BUTTON */}
                 <div className="border-t border-stone-150 pt-6">
                   {generationError && (
                     <div className="bg-rose-50 border border-rose-250 p-4 rounded-xl text-rose-800 flex items-start gap-3 mb-4 text-xs">
@@ -879,13 +842,9 @@ if (finalSuiteData.readingPassages) {
                     </button>
                   )}
                 </div>
-
               </div>
 
-              {/* Right Column: Study History Board (4 cols) */}
               <div className="lg:col-span-4 space-y-6 no-print">
-
-                {/* Cumulative study history timeline */}
                 <div className="bg-white border border-stone-200 rounded-2xl p-5 shadow-xs space-y-4">
                   <div className="flex justify-between items-center border-b border-stone-100 pb-3">
                     <h3 className="text-xs font-bold font-display uppercase tracking-wider text-stone-900 flex items-center gap-2">
@@ -927,10 +886,10 @@ if (finalSuiteData.readingPassages) {
                               {new Date(log.timestamp).toLocaleDateString()} Completer
                             </span>
                             <p className="text-xs font-bold font-display text-stone-900">
-                              Comprehensive Accuracy Accuracy: {log.scoreSummary.comprehensive.score}%
+                              Comprehensive Accuracy: {log.scoreSummary.comprehensive.score}%
                             </p>
                             <span className="text-[10px] text-stone-500 font-sans block">
-                              Total correct count: {log.scoreSummary.comprehensive.correct}/{log.scoreSummary.comprehensive.total}
+                              Total correct: {log.scoreSummary.comprehensive.correct}/{log.scoreSummary.comprehensive.total}
                             </span>
                           </div>
                           <span className={`w-8 h-8 rounded-full flex items-center justify-center font-mono text-[10px] font-bold shrink-0 ${
@@ -947,19 +906,13 @@ if (finalSuiteData.readingPassages) {
                     </div>
                   )}
                 </div>
-
               </div>
-
             </div>
-
           </div>
         )}
 
-        {/* INTERACTIVE TEST PLAYER SCREEN */}
         {activeTab === "player" && examSuite && (
           <div className="space-y-6 animate-fade-in" id="quiz-player-dashboard">
-            
-            {/* Quick dashboard bar */}
             <div className="bg-white border border-stone-200 rounded-2xl p-4 md:p-6 flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
               <div className="space-y-1">
                 <span className="bg-amber-100 font-mono text-[9px] px-2 py-0.5 rounded font-bold uppercase tracking-wider text-amber-900">
@@ -973,7 +926,6 @@ if (finalSuiteData.readingPassages) {
                 </p>
               </div>
 
-              {/* Action shortcuts */}
               <div className="flex flex-wrap items-center gap-2 w-full md:w-auto">
                 <button
                   onClick={() => setActiveTab("worksheet")}
@@ -994,10 +946,7 @@ if (finalSuiteData.readingPassages) {
               </div>
             </div>
 
-            {/* Layout split: Left Side Menu, Right Side exercise viewport */}
             <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-              
-              {/* Left sidebar sub nav selector (3 cols) */}
               <div className="lg:col-span-3 flex flex-col gap-2 bg-white p-3 border border-stone-200 rounded-2xl shadow-xs" id="player-sections-nav">
                 <span className="text-[10px] font-bold font-mono uppercase text-stone-500 px-3 py-1.5 select-none text-center">Sections Checklist</span>
                 
@@ -1044,10 +993,8 @@ if (finalSuiteData.readingPassages) {
                 </div>
               </div>
 
-              {/* Right viewport: Display active exercise suite (9 cols) */}
               <div className="lg:col-span-9 bg-white border border-stone-200 p-6 md:p-8 rounded-2xl shadow-xs" id="player-exercise-viewport">
                 
-                {/* 1. VOCABULARY VIEW */}
                 {currentSection === "vocab" && examSuite.vocabQuestions && (
                   <div className="space-y-6" id="player-vocab-section">
                     <div className="border-b border-stone-100 pb-3 flex justify-between items-center">
@@ -1069,11 +1016,9 @@ if (finalSuiteData.readingPassages) {
                               {q.question}
                             </p>
 
-                            {/* Clickable beautiful options split horizontally as layout guideline */}
                             <div className="grid grid-cols-1 md:grid-cols-4 gap-2.5 mt-4">
                               {["A", "B", "C", "D"].map((letter) => {
-                                // Match the option string
-                                const optString = q.options.find(o => o.startsWith(`(${letter})`)) || `(${letter})`;
+                                const optString = q.options.find((o: string) => o.startsWith(`(${letter})`)) || `(${letter})`;
                                 const isSelected = userSelectedChoice === letter;
                                 return (
                                   <button
@@ -1107,7 +1052,6 @@ if (finalSuiteData.readingPassages) {
                   </div>
                 )}
 
-                {/* 2. LEVELED READING COMPREHENSION */}
                 {currentSection === "reading" && examSuite.readingPassages && (
                   <div className="space-y-8" id="player-reading-section">
                     <div className="border-b border-stone-100 pb-3">
@@ -1133,7 +1077,7 @@ if (finalSuiteData.readingPassages) {
                         </p>
 
                         <div className="space-y-6 pt-4">
-                          {p.questions.map((q, qIdx) => {
+                          {p.questions.map((q: any, qIdx: number) => {
                             const userKey = `${pIdx}-${qIdx}`;
                             const userAns = session.answers.reading[userKey] || "";
                             return (
@@ -1143,10 +1087,9 @@ if (finalSuiteData.readingPassages) {
                                   {q.question}
                                 </p>
 
-                                {/* Multiple choice options rendered in a single list on separate lines */}
                                 <div className="flex flex-col gap-2 mt-3 pl-1">
                                   {["A", "B", "C", "D"].map((letter) => {
-                                    const optStr = q.options.find(o => o.startsWith(`(${letter})`)) || `(${letter})`;
+                                    const optStr = q.options.find((o: string) => o.startsWith(`(${letter})`)) || `(${letter})`;
                                     const isSelected = userAns === letter;
                                     return (
                                       <button
@@ -1182,7 +1125,6 @@ if (finalSuiteData.readingPassages) {
                   </div>
                 )}
 
-                {/* Next Section Trigger in footer */}
                 <div className="border-t border-stone-150 pt-6 mt-12 flex justify-between items-center text-xs">
                   <span className="text-stone-400 font-serif italic">Have faith in your English intuition!</span>
                   <button
@@ -1194,15 +1136,11 @@ if (finalSuiteData.readingPassages) {
                     Submit Final Assessment
                   </button>
                 </div>
-
               </div>
-
             </div>
-
           </div>
         )}
 
-        {/* PRINTABLE WORKSHEET VIEW SCREEN */}
         {activeTab === "worksheet" && examSuite && (
           <WorksheetExport 
             suite={examSuite} 
@@ -1210,13 +1148,11 @@ if (finalSuiteData.readingPassages) {
           />
         )}
 
-        {/* PROGRESS DIAGNOSTICS REPORT SHEET */}
         {activeTab === "report" && activeReport && examSuite && (
           <ProgressReportView
             report={activeReport}
             suite={examSuite}
             onRestart={() => {
-              // Clear current generated package to reset setup form
               setExamSuite(null);
               setActiveTab("lobby");
             }}
@@ -1228,7 +1164,6 @@ if (finalSuiteData.readingPassages) {
 
       </main>
 
-      {/* Persistent Footer */}
       <footer className="no-print bg-white border-t border-stone-200 mt-16 py-6 text-center text-[11px] text-stone-500 font-sans">
         <p className="font-semibold text-stone-700">GSAT English Mock Paper Creator • 學測英文模考創建器</p>
         <p className="mt-1 text-[10px] text-amber-800 font-medium">Designed by Tr. Shirley Du</p>
