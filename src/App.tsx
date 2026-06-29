@@ -339,17 +339,18 @@ export default function App() {
       }
 // Normalize options to always be arrays
 const normalizeOptions = (opts: any): string[] => {
-  if (Array.isArray(opts)) return opts;
-  if (opts && typeof opts === "object") return Object.values(opts);
-  return [];
+  let arr: string[] = [];
+  if (Array.isArray(opts)) arr = opts;
+  else if (opts && typeof opts === "object") arr = Object.values(opts);
+  else return ["(A)", "(B)", "(C)", "(D)"];
+  
+  // If options don't already have (A)/(B) prefix, add them
+  return arr.map((opt, idx) => {
+    const letter = ["A", "B", "C", "D"][idx];
+    const s = String(opt).trim();
+    return s.startsWith(`(${letter})`) ? s : `(${letter}) ${s}`;
+  });
 };
-
-if (finalSuiteData.vocabQuestions) {
-  finalSuiteData.vocabQuestions = finalSuiteData.vocabQuestions.map((q: any) => ({
-    ...q,
-    options: normalizeOptions(q.options)
-  }));
-}
 
 if (finalSuiteData.readingPassages) {
   finalSuiteData.readingPassages = finalSuiteData.readingPassages.map((p: any) => ({
