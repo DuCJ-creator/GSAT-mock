@@ -135,10 +135,11 @@ app.post("/api/generate", async (req, res) => {
 
     if (selectedExerciseTypes.reading && selectedReadingLevels && selectedReadingLevels.length > 0) {
       activeSections.push("readingPassages");
-      sectionsGuidelines += `
-2. "readingPassages": Create reading comprehension passages for the selected levels: ${selectedReadingLevels.join(", ")}.
-   - For EACH selected level, create a distinct, high-quality, interesting passage of 200-250 words.
-   - Each passage MUST be followed by exactly 4 reading comprehension questions.
+sectionsGuidelines += `
+2. "readingPassages": Create EXACTLY ONE reading comprehension passage for the level: ${selectedReadingLevels.join(", ")}.
+   - Create ONLY 1 passage total. Do NOT create multiple passages.
+   - The single passage MUST be 200-250 words.
+   - It MUST be followed by EXACTLY 4 questions.
    - The questions should test global reading skills (e.g., main idea, detail lookup, tone analysis, context-clue inferring, title selection).
    - The correct answers must be distributed evenly without clustering.
    - Provide 4 options for each question.
