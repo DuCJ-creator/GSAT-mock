@@ -285,18 +285,18 @@ export default function App() {
 
         if (!resVocab.ok) throw new Error(await getErrorMsg(resVocab));
 
-        const resVocabData = await resVocab.json();
-        if (resVocabData.success && resVocabData.data && resVocabData.data.vocabQuestions) {
-          finalSuiteData.vocabQuestions = resVocabData.data.vocabQuestions.map((q: any) => ({
-            ...q,
-            options: normalizeOptions(q.options),
-            correctAnswer: normalizeAnswer(q.correctAnswer)
-          }));
-          console.log("NORMALIZED VOCAB Q1:", JSON.stringify(finalSuiteData.vocabQuestions[0], null, 2));
-        } else {
-          throw new Error("生成學測字彙題失敗，請重試。");
-        }
-      }
+       const resVocabData = await resVocab.json();
+console.log("RAW Q1 options:", JSON.stringify(resVocabData.data?.vocabQuestions?.[0]?.options));
+if (resVocabData.success && resVocabData.data && resVocabData.data.vocabQuestions) {
+  finalSuiteData.vocabQuestions = resVocabData.data.vocabQuestions.map((q: any) => ({
+    ...q,
+    options: normalizeOptions(q.options || q.choices),
+    correctAnswer: normalizeAnswer(q.correctAnswer || q.answer)
+  }));
+  console.log("NORMALIZED VOCAB Q1:", JSON.stringify(finalSuiteData.vocabQuestions[0], null, 2));
+} else {
+  throw new Error("生成學測字彙題失敗，請重試。");
+}
 
       // 2. Generate Reading passages per level if checked
       if (selectedExerciseTypes.reading && selectedReadingLevels && selectedReadingLevels.length > 0) {
