@@ -319,6 +319,7 @@ if (resVocabData.success && resVocabData.data && resVocabData.data.vocabQuestion
           if (!resReading.ok) throw new Error(await getErrorMsg(resReading));
 
           const resReadingData = await resReading.json();
+          console.log("RAW READING RESPONSE:", JSON.stringify(resReadingData, null, 2));
           if (resReadingData.success && resReadingData.data) {
             let passages = resReadingData.data.readingPassages;
 
