@@ -185,27 +185,33 @@ export default function App() {
   };
 
   // Normalize options to always be arrays with (A)/(B)/(C)/(D) prefixes
-  const normalizeOptions = (opts: any): string[] => {
-    let arr: string[] = [];
-    if (Array.isArray(opts)) {
-      arr = opts;
-    } else if (opts && typeof opts === "object") {
-      // Handle object format like {"(A)": "text", "(B)": "text"}
-      arr = Object.entries(opts).map(([key, val]) => `${key} ${val}`);
+const normalizeOptions = (opts: any): string[] => {
+  let arr: string[] = [];
+
+  if (Array.isArray(opts)) {
+    arr = opts;
+  } else if (typeof opts === "string") {
+    // Handle single string like "(A) compact (B) horizontal (C) infinite (D) naive"
+    const matches = opts.match(/\([A-D]\)[^()]*(?=\([A-D]\)|$)/g);
+    if (matches) {
+      arr = matches.map(s => s.trim());
     } else {
       return ["(A)", "(B)", "(C)", "(D)"];
     }
+  } else if (opts && typeof opts === "object") {
+    arr = Object.entries(opts).map(([key, val]) => `${key} ${val}`);
+  } else {
+    return ["(A)", "(B)", "(C)", "(D)"];
+  }
 
-    return arr.map((opt, idx) => {
-      const letter = ["A", "B", "C", "D"][idx];
-      const s = String(opt).trim();
-      // Already has (A) prefix
-      if (s.startsWith(`(${letter})`)) return s;
-      // Has (A): or (A). prefix
-      if (s.match(/^\([A-D]\)/)) return s;
-      return `(${letter}) ${s}`;
-    });
-  };
+  return arr.map((opt, idx) => {
+    const letter = ["A", "B", "C", "D"][idx];
+    const s = String(opt).trim();
+    if (s.startsWith(`(${letter})`)) return s;
+    if (s.match(/^\([A-D]\)/)) return s;
+    return `(${letter}) ${s}`;
+  });
+};
 
   // Normalize correctAnswer to single letter: "(A)" -> "A"
   const normalizeAnswer = (ans: any): string => {
