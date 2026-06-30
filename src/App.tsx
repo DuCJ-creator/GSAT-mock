@@ -297,6 +297,7 @@ if (resVocabData.success && resVocabData.data && resVocabData.data.vocabQuestion
 } else {
   throw new Error("生成學測字彙題失敗，請重試。");
 }
+        }
 
       // 2. Generate Reading passages per level if checked
       if (selectedExerciseTypes.reading && selectedReadingLevels && selectedReadingLevels.length > 0) {
