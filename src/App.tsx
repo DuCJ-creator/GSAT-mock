@@ -329,6 +329,7 @@ export default function App() {
           }
 
           const resReadingData = await resReading.json();
+          console.log("READING RESPONSE:", JSON.stringify(resReadingData, null, 2));
           if (resReadingData.success && resReadingData.data) {
             const passages = resReadingData.data.readingPassages;
             if (passages && passages.length > 0 && passages[0]) {
