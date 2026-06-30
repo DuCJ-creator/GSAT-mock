@@ -292,6 +292,7 @@ export default function App() {
             options: normalizeOptions(q.options),
             correctAnswer: normalizeAnswer(q.correctAnswer)
           }));
+          console.log("NORMALIZED VOCAB Q1:", JSON.stringify(finalSuiteData.vocabQuestions[0], null, 2));
         } else {
           throw new Error("生成學測字彙題失敗，請重試。");
         }
