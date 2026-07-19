@@ -198,11 +198,13 @@ const normalizeOptions = (opts: any): string[] => {
     } else {
       return ["(A)", "(B)", "(C)", "(D)"];
     }
-  } else if (opts && typeof opts === "object") {
-    arr = Object.entries(opts).map(([key, val]) => `${key} ${val}`);
-  } else {
-    return ["(A)", "(B)", "(C)", "(D)"];
-  }
+ } else if (opts && typeof opts === "object") {
+  arr = Object.entries(opts).map(([key, val]) => {
+    // Handle both "(A)" and "A" style keys
+    const k = key.startsWith("(") ? key : `(${key})`;
+    return `${k} ${val}`;
+  });
+}
 
   return arr.map((opt, idx) => {
     const letter = ["A", "B", "C", "D"][idx];
@@ -338,10 +340,10 @@ if (resVocabData.success && resVocabData.data && resVocabData.data.vocabQuestion
               const passage = {
                 ...passages[0],
                 questions: (passages[0].questions || []).map((q: any) => ({
-                  ...q,
-                  options: normalizeOptions(q.options),
-                  correctAnswer: normalizeAnswer(q.correctAnswer)
-                }))
+  ...q,
+  options: normalizeOptions(q.options || q.choices),
+  correctAnswer: normalizeAnswer(q.correctAnswer || q.answer)
+}))
               };
               finalSuiteData.readingPassages.push(passage);
             } else {
