@@ -327,32 +327,28 @@ if (resVocabData.success && resVocabData.data && resVocabData.data.vocabQuestion
 
           const resReadingData = await resReading.json();
           console.log("RAW READING RESPONSE:", JSON.stringify(resReadingData, null, 2));
-          if (resReadingData.success && resReadingData.data) {
-            let passages = resReadingData.data.readingPassages;
+if (resReadingData.success && resReadingData.data) {
+  // Handle both "readingPassages" and "readingPassage" (singular) field names
+  let passages = resReadingData.data.readingPassages || resReadingData.data.readingPassage;
 
-            // Handle both array and single object responses from AI
-            if (passages && !Array.isArray(passages)) {
-              passages = [passages];
-            }
+  if (passages && !Array.isArray(passages)) {
+    passages = [passages];
+  }
 
-            if (passages && passages.length > 0 && passages[0]) {
-              const passage = {
-                ...passages[0],
-                questions: (passages[0].questions || []).map((q: any) => ({
-  ...q,
-  options: normalizeOptions(q.options || q.choices),
-  correctAnswer: normalizeAnswer(q.correctAnswer || q.answer)
-}))
-              };
-              finalSuiteData.readingPassages.push(passage);
-            } else {
-              throw new Error(`生成 ${lvlLabel} 閱讀測驗失敗，請重試。`);
-            }
-          } else {
-            throw new Error(resReadingData.error || `生成 ${lvlLabel} 閱讀測驗失敗，請重試。`);
-          }
-        }
-      }
+  if (passages && passages.length > 0 && passages[0]) {
+    const passage = {
+      ...passages[0],
+      questions: (passages[0].questions || []).map((q: any) => ({
+        ...q,
+        options: normalizeOptions(q.options || q.choices),
+        correctAnswer: normalizeAnswer(q.correctAnswer || q.answer)
+      }))
+    };
+    finalSuiteData.readingPassages.push(passage);
+  } else {
+    throw new Error(`生成 ${lvlLabel} 閱讀測驗失敗，請重試。`);
+  }
+}
 
       // Final filter to remove any malformed passages
       finalSuiteData.readingPassages = finalSuiteData.readingPassages
