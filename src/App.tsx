@@ -1,30 +1,21 @@
-
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect } from "react";
 import { 
-  Plus, 
-  Trash2, 
   Sparkles, 
-  BookOpen, 
   GraduationCap, 
   Layers, 
   Settings, 
   CheckCircle, 
   Award, 
-  Clock, 
   History, 
   RefreshCw, 
   AlertCircle, 
   Printer, 
-  ArrowRight, 
-  ListOrdered,
-  HelpCircle,
-  X,
-  FileText
+  ArrowRight
 } from "lucide-react";
 import { fetchAndParseCSV, padVocabularyIfNecessary } from "./utils/csvFetcher";
 import { VocabWord, GeneratedExamSuite, PracticeSessionState, ProgressReport } from "./types";
@@ -40,7 +31,6 @@ const REASSURING_MESSAGES = [
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<"lobby" | "player" | "worksheet" | "report">("lobby");
-  
   const [vocabSource, setVocabSource] = useState<"system" | "self-input">("system");
   const [selectedLevel, setSelectedLevel] = useState<number>(4);
   const [availableWords, setAvailableWords] = useState<VocabWord[]>([]);
@@ -48,30 +38,22 @@ export default function App() {
   const [selectedUnits, setSelectedUnits] = useState<string[]>([]);
   const [unitSearch, setUnitSearch] = useState<string>("");
   const [unitsDropdownOpen, setUnitsDropdownOpen] = useState<boolean>(false);
-
   const [selfInputText, setSelfInputText] = useState<string>(
     "accommodate v.\nvital adj.\nsystem n.\nalleviate v.\ncomprehensive adj.\ncoincide v.\ndevastate v.\nexaggerate v.\npersistent adj.\nversatile adj."
   );
   const [selfInputError, setSelfInputError] = useState<string | null>(null);
-
-  const [selectedExerciseTypes, setSelectedExerciseTypes] = useState({
-    vocab: true,
-    reading: true
-  });
+  const [selectedExerciseTypes, setSelectedExerciseTypes] = useState({ vocab: true, reading: true });
   const [selectedReadingLevels, setSelectedReadingLevels] = useState<string[]>(["basic", "essential", "advanced"]);
-
   const [examSuite, setExamSuite] = useState<GeneratedExamSuite | null>(null);
   const [generationLoading, setGenerationLoading] = useState<boolean>(false);
   const [loadingStepMsg, setLoadingStepMsg] = useState<string>("");
   const [generationError, setGenerationError] = useState<string | null>(null);
-
   const [session, setSession] = useState<PracticeSessionState>({
     answers: { vocab: {}, cloze: {}, blankMatching: {}, reading: {} },
     submitted: false,
     startTime: 0
   });
   const [currentSection, setCurrentSection] = useState<"vocab" | "cloze" | "matching" | "reading">("vocab");
-
   const [studyHistory, setStudyHistory] = useState<ProgressReport[]>([]);
   const [activeReport, setActiveReport] = useState<ProgressReport | null>(null);
 
@@ -89,17 +71,13 @@ export default function App() {
   }, [generationLoading]);
 
   useEffect(() => {
-    if (vocabSource === "system") {
-      loadSystemWords(selectedLevel);
-    }
+    if (vocabSource === "system") loadSystemWords(selectedLevel);
   }, [selectedLevel, vocabSource]);
 
   useEffect(() => {
     try {
       const saved = localStorage.getItem("gsat_buffet_history");
-      if (saved) {
-        setStudyHistory(JSON.parse(saved));
-      }
+      if (saved) setStudyHistory(JSON.parse(saved));
     } catch (e) {
       console.error("Error reading storage", e);
     }
@@ -110,7 +88,7 @@ export default function App() {
     try {
       const words = await fetchAndParseCSV(level);
       setAvailableWords(words);
-      const uniqueUnits = Array.from(new Set<string>(words.map(w => w.unit))).sort((a: string, b: string) => parseInt(a) - parseInt(b));
+      const uniqueUnits = Array.from(new Set<string>(words.map(w => w.unit))).sort((a, b) => parseInt(a) - parseInt(b));
       setSelectedUnits(uniqueUnits.slice(0, 3));
     } catch (err) {
       console.error(err);
@@ -122,28 +100,21 @@ export default function App() {
   const parseSelfInputList = (): { word: string; pos?: string; meaning?: string }[] => {
     const list: { word: string; pos?: string; meaning?: string }[] = [];
     const lines = selfInputText.split("\n");
-
     for (const line of lines) {
       const cleanLine = line.trim();
       if (!cleanLine) continue;
-
       const posRegex = /\b(v|adj|n|adv|prep|pron|conj|v\.|adj\.|n\.|adv\.|prep\.|pron\.|conj\.)\b|(?:\((v|adj|n|adv|prep|pron|conj|v\.|adj\.|n\.|adv\.|prep\.|pron\.|conj\.)\))/i;
       const matchPos = cleanLine.match(posRegex);
-      
       let pos = undefined;
       if (matchPos) {
         pos = (matchPos[1] || matchPos[2] || "").trim().toLowerCase();
         if (pos.endsWith(".")) pos = pos.slice(0, -1);
       }
-
       let word = "";
       let remaining = "";
-
       if (matchPos && matchPos.index !== undefined) {
-        const index = matchPos.index;
-        const posText = matchPos[0];
-        word = cleanLine.substring(0, index).trim();
-        remaining = cleanLine.substring(index + posText.length).trim();
+        word = cleanLine.substring(0, matchPos.index).trim();
+        remaining = cleanLine.substring(matchPos.index + matchPos[0].length).trim();
       } else {
         const delimMatch = cleanLine.match(/[-:]/);
         if (delimMatch && delimMatch.index !== undefined) {
@@ -151,80 +122,70 @@ export default function App() {
           remaining = cleanLine.substring(delimMatch.index + 1).trim();
         } else {
           const tokens = cleanLine.split(/\s+/);
-          let englishTokens: string[] = [];
-          let otherTokens: string[] = [];
+          const englishTokens: string[] = [];
+          const otherTokens: string[] = [];
           let foundCh = false;
           for (const token of tokens) {
-            if (foundCh) {
-              otherTokens.push(token);
-            } else if (/^[a-zA-Z\s-]+$/.test(token)) {
-              englishTokens.push(token);
-            } else {
-              foundCh = true;
-              otherTokens.push(token);
-            }
+            if (foundCh) otherTokens.push(token);
+            else if (/^[a-zA-Z\s-]+$/.test(token)) englishTokens.push(token);
+            else { foundCh = true; otherTokens.push(token); }
           }
-          if (englishTokens.length > 0) {
-            word = englishTokens.join(" ").trim();
-            remaining = otherTokens.join(" ").trim();
-          } else {
-            word = cleanLine.replace(/[^a-zA-Z\s-]/g, "").trim();
-          }
+          word = englishTokens.length > 0 ? englishTokens.join(" ").trim() : cleanLine.replace(/[^a-zA-Z\s-]/g, "").trim();
+          remaining = otherTokens.join(" ").trim();
         }
       }
-
       word = word.replace(/^[^a-zA-Z]+|[^a-zA-Z\s-]+$/g, "").trim();
-      let meaning = remaining.replace(/^[-:\s~;]+/g, "").trim();
-
-      if (word && word.length > 0) {
-        list.push({ word, pos: pos || undefined, meaning: meaning || undefined });
-      }
+      const meaning = remaining.replace(/^[-:\s~;]+/g, "").trim();
+      if (word.length > 0) list.push({ word, pos: pos || undefined, meaning: meaning || undefined });
     }
-
     return list;
   };
 
-  // Normalize options to always be arrays with (A)/(B)/(C)/(D) prefixes
-const normalizeOptions = (opts: any): string[] => {
-  let arr: string[] = [];
+  // Normalize options — handles all AI response formats
+  const normalizeOptions = (opts: any): string[] => {
+    let arr: string[] = [];
 
-  if (Array.isArray(opts)) {
-    // Handle array of single-key objects: [{"A": "text"}, {"B": "text"}]
-    if (opts.length > 0 && typeof opts[0] === "object" && !Array.isArray(opts[0])) {
-      arr = opts.map((item: any) => {
-        const [key, val] = Object.entries(item)[0];
+    if (Array.isArray(opts)) {
+      // Array of single-key objects: [{"A": "text"}, {"B": "text"}]
+      if (opts.length > 0 && typeof opts[0] === "object" && opts[0] !== null && !Array.isArray(opts[0])) {
+        arr = opts.map((item: any) => {
+          const entries = Object.entries(item);
+          if (entries.length === 0) return "";
+          const [key, val] = entries[0];
+          const k = key.startsWith("(") ? key : `(${key})`;
+          return `${k} ${String(val)}`;
+        });
+      } else {
+        arr = opts.map((o: any) => String(o));
+      }
+    } else if (typeof opts === "string") {
+      // Single string: "(A) compact (B) horizontal (C) infinite (D) naive"
+      const matches = opts.match(/\([A-D]\)[^()]*(?=\([A-D]\)|$)/g);
+      if (matches) {
+        arr = matches.map(s => s.trim());
+      } else {
+        return ["(A)", "(B)", "(C)", "(D)"];
+      }
+    } else if (opts && typeof opts === "object") {
+      // Object: {"(A)": "text"} or {"A": "text"}
+      arr = Object.entries(opts).map(([key, val]) => {
         const k = key.startsWith("(") ? key : `(${key})`;
         return `${k} ${String(val)}`;
       });
     } else {
-      arr = opts.map((o: any) => String(o));
-    }
-  } else if (typeof opts === "string") {
-    const matches = opts.match(/\([A-D]\)[^()]*(?=\([A-D]\)|$)/g);
-    if (matches) {
-      arr = matches.map(s => s.trim());
-    } else {
       return ["(A)", "(B)", "(C)", "(D)"];
     }
-  } else if (opts && typeof opts === "object") {
-    arr = Object.entries(opts).map(([key, val]) => {
-      const k = key.startsWith("(") ? key : `(${key})`;
-      return `${k} ${String(val)}`;
+
+    return arr.map((opt, idx) => {
+      const letter = ["A", "B", "C", "D"][idx];
+      const s = String(opt).trim();
+      if (s.startsWith(`(${letter})`)) return s;
+      if (s.match(/^\([A-D]\)/)) return s;
+      return `(${letter}) ${s}`;
     });
-  } else {
-    return ["(A)", "(B)", "(C)", "(D)"];
-  }
+  };
 
-  return arr.map((opt, idx) => {
-    const letter = ["A", "B", "C", "D"][idx];
-    const s = String(opt).trim();
-    if (s.startsWith(`(${letter})`)) return s;
-    if (s.match(/^\([A-D]\)/)) return s;
-    return `(${letter}) ${s}`;
-  });
-};
-
-  // Normalize correctAnswer to single letter: "(A)" -> "A"
+  // Normalize correctAnswer: "(A)" or "A" -> "A"
   const normalizeAnswer = (ans: any): string => {
     return String(ans).replace(/[()]/g, "").trim();
   };
@@ -239,29 +200,20 @@ const normalizeOptions = (opts: any): string[] => {
 
       if (vocabSource === "system") {
         let filteredWords = availableWords;
-        if (selectedUnits.length > 0) {
-          filteredWords = availableWords.filter(w => selectedUnits.includes(w.unit));
-        }
+        if (selectedUnits.length > 0) filteredWords = availableWords.filter(w => selectedUnits.includes(w.unit));
         finalVocabList = filteredWords.map(w => ({ word: w.word, pos: w.pos, meaning: w.meaning }));
         sourceCount = finalVocabList.length;
       } else {
         const list = parseSelfInputList();
         if (list.length === 0) throw new Error("請先在自主輸入區塊輸入單字列表喔！");
-        if (list.length < 12) {
-          const padded = await padVocabularyIfNecessary(list, selectedLevel, 12);
-          finalVocabList = padded;
-        } else {
-          finalVocabList = list;
-        }
+        finalVocabList = list.length < 12 ? await padVocabularyIfNecessary(list, selectedLevel, 12) : list;
         sourceCount = list.length;
       }
 
       if (finalVocabList.length === 0) throw new Error("找不到可用的單字。請嘗試重選字表級別或檢查輸入。");
+      if (!Object.values(selectedExerciseTypes).some(v => v)) throw new Error("請至少勾選一種想練習或列印的學測大題型！");
 
-      const hasAnySelected = Object.values(selectedExerciseTypes).some(v => v === true);
-      if (!hasAnySelected) throw new Error("請至少勾選一種想練習或列印的學測大題型！");
-
-      const getErrorMsg = async (response: Response) => {
+      const getErrorMsg = async (response: Response): Promise<string> => {
         let errorMsg = "";
         try {
           const text = await response.text();
@@ -269,24 +221,22 @@ const normalizeOptions = (opts: any): string[] => {
             const errorData = JSON.parse(text);
             errorMsg = errorData.error || "";
           } catch {
-            if (text.includes("Action required to load your app") || text.includes("security cookie")) {
-              errorMsg = "瀏覽器第三方 Cookie 遭到阻擋，請開啟瀏覽器 Cookie 存取權限，或點選右上角『在新分頁中開啟』本程式。";
-            } else {
-              errorMsg = text.slice(0, 300);
-            }
+            errorMsg = text.includes("security cookie") 
+              ? "瀏覽器第三方 Cookie 遭到阻擋，請開啟瀏覽器 Cookie 存取權限。"
+              : text.slice(0, 300);
           }
-        } catch (e) {
+        } catch {
           errorMsg = `狀態碼: ${response.status}`;
         }
-        if (response.status === 500 && (!errorMsg || errorMsg.includes("API Configuration Error") || errorMsg.includes("Status: 500") || errorMsg.includes("Internal Server Error"))) {
-          errorMsg = "API 金鑰未設定或已失效。請至左上角或右上角 Settings > Secrets 檢查是否設定了『GEMINI_API_KEY』並重新整理。";
+        if (response.status === 500 && (!errorMsg || errorMsg.includes("API Configuration Error"))) {
+          errorMsg = "API 金鑰未設定或已失效。請檢查 GEMINI_API_KEY 或 OPENAI_API_KEY 設定。";
         }
         return errorMsg || "大腦生成模組失敗，請稍後再試。";
       };
 
       const finalSuiteData: any = { vocabQuestions: [], readingPassages: [] };
 
-      // 1. Generate Vocab Questions if checked
+      // 1. Generate Vocab Questions
       if (selectedExerciseTypes.vocab) {
         setLoadingStepMsg("正在為您精心設計學測字彙單選題 (10 題)...");
         const resVocab = await fetch("/api/generate", {
@@ -302,21 +252,22 @@ const normalizeOptions = (opts: any): string[] => {
 
         if (!resVocab.ok) throw new Error(await getErrorMsg(resVocab));
 
-       const resVocabData = await resVocab.json();
-console.log("RAW Q1 options:", JSON.stringify(resVocabData.data?.vocabQuestions?.[0]?.options));
-if (resVocabData.success && resVocabData.data && resVocabData.data.vocabQuestions) {
-  finalSuiteData.vocabQuestions = resVocabData.data.vocabQuestions.map((q: any) => ({
-    ...q,
-    options: normalizeOptions(q.options || q.choices),
-    correctAnswer: normalizeAnswer(q.correctAnswer || q.answer)
-  }));
-  console.log("NORMALIZED VOCAB Q1:", JSON.stringify(finalSuiteData.vocabQuestions[0], null, 2));
-} else {
-  throw new Error("生成學測字彙題失敗，請重試。");
-}
-        }
+        const resVocabData = await resVocab.json();
+        console.log("RAW Q1 options:", JSON.stringify(resVocabData.data?.vocabQuestions?.[0]?.options));
 
-      // 2. Generate Reading passages per level if checked
+        if (resVocabData.success && resVocabData.data && resVocabData.data.vocabQuestions) {
+          finalSuiteData.vocabQuestions = resVocabData.data.vocabQuestions.map((q: any) => ({
+            ...q,
+            options: normalizeOptions(q.options || q.choices),
+            correctAnswer: normalizeAnswer(q.correctAnswer || q.answer)
+          }));
+          console.log("NORMALIZED VOCAB Q1:", JSON.stringify(finalSuiteData.vocabQuestions[0], null, 2));
+        } else {
+          throw new Error("生成學測字彙題失敗，請重試。");
+        }
+      }
+
+      // 2. Generate Reading Passages
       if (selectedExerciseTypes.reading && selectedReadingLevels && selectedReadingLevels.length > 0) {
         for (const lvl of selectedReadingLevels) {
           const lvlLabel = lvl === "basic" ? "基礎級 (Basic)" : lvl === "essential" ? "核心級 (Essential)" : "進階級 (Advanced)";
@@ -337,30 +288,36 @@ if (resVocabData.success && resVocabData.data && resVocabData.data.vocabQuestion
 
           const resReadingData = await resReading.json();
           console.log("RAW READING RESPONSE:", JSON.stringify(resReadingData, null, 2));
-if (resReadingData.success && resReadingData.data) {
-  // Handle both "readingPassages" and "readingPassage" (singular) field names
-  let passages = resReadingData.data.readingPassages || resReadingData.data.readingPassage;
 
-  if (passages && !Array.isArray(passages)) {
-    passages = [passages];
-  }
+          if (resReadingData.success && resReadingData.data) {
+            // Handle both "readingPassages" (plural) and "readingPassage" (singular)
+            let passages = resReadingData.data.readingPassages || resReadingData.data.readingPassage;
 
-  if (passages && passages.length > 0 && passages[0]) {
-    const passage = {
-      ...passages[0],
-      questions: (passages[0].questions || []).map((q: any) => ({
-        ...q,
-        options: normalizeOptions(q.options || q.choices),
-        correctAnswer: normalizeAnswer(q.correctAnswer || q.answer)
-      }))
-    };
-    finalSuiteData.readingPassages.push(passage);
-  } else {
-    throw new Error(`生成 ${lvlLabel} 閱讀測驗失敗，請重試。`);
-  }
-}
+            // Wrap single object in array
+            if (passages && !Array.isArray(passages)) {
+              passages = [passages];
+            }
 
-      // Final filter to remove any malformed passages
+            if (passages && passages.length > 0 && passages[0]) {
+              const passage = {
+                ...passages[0],
+                questions: (passages[0].questions || []).map((q: any) => ({
+                  ...q,
+                  options: normalizeOptions(q.options || q.choices),
+                  correctAnswer: normalizeAnswer(q.correctAnswer || q.answer)
+                }))
+              };
+              finalSuiteData.readingPassages.push(passage);
+            } else {
+              throw new Error(`生成 ${lvlLabel} 閱讀測驗失敗，請重試。`);
+            }
+          } else {
+            throw new Error(resReadingData.error || `生成 ${lvlLabel} 閱讀測驗失敗，請重試。`);
+          }
+        }
+      }
+
+      // Filter malformed passages
       finalSuiteData.readingPassages = finalSuiteData.readingPassages
         .filter((p: any) => p && p.questions && Array.isArray(p.questions) && p.questions.length > 0);
 
@@ -376,16 +333,11 @@ if (resReadingData.success && resReadingData.data) {
       };
 
       setExamSuite(suite);
-      setSession({
-        answers: { vocab: {}, cloze: {}, blankMatching: {}, reading: {} },
-        submitted: false,
-        startTime: Date.now()
-      });
-
+      setSession({ answers: { vocab: {}, cloze: {}, blankMatching: {}, reading: {} }, submitted: false, startTime: Date.now() });
       if (suite.vocabQuestions && suite.vocabQuestions.length > 0) setCurrentSection("vocab");
       else if (suite.readingPassages && suite.readingPassages.length > 0) setCurrentSection("reading");
-
       setActiveTab("player");
+
     } catch (err: any) {
       console.error(err);
       setGenerationError(err.message || "生卷失敗，請檢查網路連線或稍等後再試。");
@@ -412,14 +364,7 @@ if (resReadingData.success && resReadingData.data) {
         const isCorrect = userAns === q.correctAnswer;
         if (isCorrect) summary.vocab.correct++;
         summary.vocab.total++;
-        reportDetails.push({
-          section: "vocab",
-          questionNumberOrName: q.id,
-          isCorrect,
-          userAnswer: userAns,
-          correctAnswer: q.correctAnswer,
-          questionText: q.question
-        });
+        reportDetails.push({ section: "vocab", questionNumberOrName: q.id, isCorrect, userAnswer: userAns, correctAnswer: q.correctAnswer, questionText: q.question });
       });
       summary.vocab.score = summary.vocab.total > 0 ? Math.round((summary.vocab.correct / summary.vocab.total) * 100) : 0;
     }
@@ -432,14 +377,7 @@ if (resReadingData.success && resReadingData.data) {
           const isCorrect = userAns === q.correctAnswer;
           if (isCorrect) summary.reading.correct++;
           summary.reading.total++;
-          reportDetails.push({
-            section: "reading",
-            questionNumberOrName: `P${pIdx + 1}-Q${qIdx + 1}`,
-            isCorrect,
-            userAnswer: userAns,
-            correctAnswer: q.correctAnswer,
-            questionText: `[Passage: ${p.title}] ${q.question}`
-          });
+          reportDetails.push({ section: "reading", questionNumberOrName: `P${pIdx + 1}-Q${qIdx + 1}`, isCorrect, userAnswer: userAns, correctAnswer: q.correctAnswer, questionText: `[Passage: ${p.title}] ${q.question}` });
         });
       });
       summary.reading.score = summary.reading.total > 0 ? Math.round((summary.reading.correct / summary.reading.total) * 100) : 0;
@@ -447,33 +385,21 @@ if (resReadingData.success && resReadingData.data) {
 
     const totalCorrect = summary.vocab.correct + summary.reading.correct;
     const totalQuestions = summary.vocab.total + summary.reading.total;
-    summary.comprehensive = {
-      correct: totalCorrect,
-      total: totalQuestions,
-      score: totalQuestions > 0 ? Math.round((totalCorrect / totalQuestions) * 100) : 0
-    };
-
-    const duration = Date.now() - session.startTime;
+    summary.comprehensive = { correct: totalCorrect, total: totalQuestions, score: totalQuestions > 0 ? Math.round((totalCorrect / totalQuestions) * 100) : 0 };
 
     const report: ProgressReport = {
       sessionId: `session-${Date.now()}`,
       timestamp: Date.now(),
-      durationMs: duration,
+      durationMs: Date.now() - session.startTime,
       scoreSummary: summary,
       details: reportDetails,
       expertFeedback: "杜老師正在奮力評語中..."
     };
 
     setActiveReport(report);
-
     const updatedHistory = [report, ...studyHistory].slice(0, 50);
     setStudyHistory(updatedHistory);
-    try {
-      localStorage.setItem("gsat_buffet_history", JSON.stringify(updatedHistory));
-    } catch (e) {
-      console.error(e);
-    }
-
+    try { localStorage.setItem("gsat_buffet_history", JSON.stringify(updatedHistory)); } catch (e) { console.error(e); }
     setSession(prev => ({ ...prev, submitted: true, endTime: Date.now() }));
     setActiveTab("report");
   };
@@ -485,49 +411,40 @@ if (resReadingData.success && resReadingData.data) {
     }
   };
 
-  const uniqueUnits = Array.from(new Set<string>(availableWords.map(w => w.unit)))
-    .sort((a: string, b: string) => parseInt(a) - parseInt(b));
-
-  const filteredUnits = uniqueUnits.filter((u: string) => 
-    u.toLowerCase().includes(unitSearch.toLowerCase())
-  );
+  const uniqueUnits = Array.from(new Set<string>(availableWords.map(w => w.unit))).sort((a, b) => parseInt(a) - parseInt(b));
+  const filteredUnits = uniqueUnits.filter(u => u.toLowerCase().includes(unitSearch.toLowerCase()));
 
   return (
     <div className="min-h-screen flex flex-col font-sans bg-[#FBFBFA]">
       <header className="no-print bg-white border-b border-stone-200/80 sticky top-0 z-50 shadow-xs transition duration-200">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-3.5 flex flex-col md:flex-row md:items-center justify-between gap-4">
           <div className="flex items-center gap-3.5 cursor-pointer select-none" onClick={() => setActiveTab("lobby")}>
-            <div className="w-11 h-11 rounded-xl bg-gradient-to-br from-amber-700 to-amber-900 text-stone-100 flex items-center justify-center font-bold text-xl shadow-md border border-amber-950/20">
-              TS
-            </div>
+            <div className="w-11 h-11 rounded-xl bg-gradient-to-br from-amber-700 to-amber-900 text-stone-100 flex items-center justify-center font-bold text-xl shadow-md border border-amber-950/20">TS</div>
             <div>
               <h1 className="text-md sm:text-lg font-black tracking-tight text-stone-900 flex flex-wrap items-center gap-x-2 gap-y-0.5">
                 <span>GSAT English Mock Paper Creator</span>
                 <span className="text-amber-800 font-semibold text-sm sm:text-base">學測英文模考創建器</span>
               </h1>
               <p className="text-[11px] text-stone-500 font-sans mt-0.5 tracking-wide font-medium flex items-center gap-1.5">
-                <span className="text-amber-800">★</span> <span className="underline decoration-amber-600/40 decoration-2">Designed by Tr. Shirley Du</span>
+                <span className="text-amber-800">★</span>
+                <span className="underline decoration-amber-600/40 decoration-2">Designed by Tr. Shirley Du</span>
               </p>
             </div>
           </div>
-
           <nav className="flex items-center gap-1 sm:gap-2 text-xs">
             {examSuite && (
               <>
                 <button onClick={() => setActiveTab("player")} className={`px-3 py-2 rounded-lg font-semibold transition duration-150 flex items-center gap-1.5 ${activeTab === "player" ? "bg-teal-50 text-teal-850" : "text-stone-600 hover:bg-stone-50"}`} id="nav-player-btn">
-                  <GraduationCap className="w-4 h-4 text-teal-700" />
-                  Test Player (模擬練題)
+                  <GraduationCap className="w-4 h-4 text-teal-700" /> Test Player (模擬練題)
                 </button>
                 <button onClick={() => setActiveTab("worksheet")} className={`px-3 py-2 rounded-lg font-semibold transition duration-150 flex items-center gap-1.5 ${activeTab === "worksheet" ? "bg-amber-50 text-amber-900" : "text-stone-600 hover:bg-stone-50"}`} id="nav-worksheet-btn">
-                  <Printer className="w-4 h-4 text-amber-800" />
-                  Worksheet (列印考卷)
+                  <Printer className="w-4 h-4 text-amber-800" /> Worksheet (列印考卷)
                 </button>
               </>
             )}
             {activeReport && (
               <button onClick={() => setActiveTab("report")} className={`px-3 py-2 rounded-lg font-semibold transition duration-150 flex items-center gap-1.5 ${activeTab === "report" ? "bg-stone-850 text-white" : "text-stone-600 hover:bg-stone-50"}`} id="nav-report-btn">
-                <Award className="w-4 h-4 text-amber-400" />
-                Report (成績單)
+                <Award className="w-4 h-4 text-amber-400" /> Report (成績單)
               </button>
             )}
           </nav>
@@ -535,27 +452,21 @@ if (resReadingData.success && resReadingData.data) {
       </header>
 
       <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        
+
         {activeTab === "lobby" && (
           <div className="space-y-8 animate-fade-in" id="lobby-panel">
             <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
-              
               <div className="lg:col-span-8 bg-white border border-stone-200/90 rounded-2xl p-6 md:p-8 shadow-xs space-y-6">
                 <div className="border-b border-stone-150 pb-4">
                   <h3 className="text-lg font-bold font-display text-stone-900 flex items-center gap-2">
-                    <Layers className="w-5 h-5 text-amber-800" />
-                    Step 1: Choose Vocabulary Source / 設定學測候選字彙來源
+                    <Layers className="w-5 h-5 text-amber-800" /> Step 1: Choose Vocabulary Source / 設定學測候選字彙來源
                   </h3>
                   <p className="text-xs text-stone-500 mt-1">Select the core target vocabulary levels/units, or paste your custom word list.</p>
                 </div>
 
                 <div className="grid grid-cols-2 gap-3 p-1.5 bg-stone-100 rounded-xl" id="vocab-source-container">
-                  <button onClick={() => setVocabSource("system")} className={`py-2 rounded-lg text-xs font-bold transition duration-200 flex items-center justify-center gap-1.5 ${vocabSource === "system" ? "bg-white text-stone-900 shadow-xs" : "text-stone-500 hover:text-stone-800"}`} id="source-system-btn">
-                    System Database 系統內建單字庫
-                  </button>
-                  <button onClick={() => setVocabSource("self-input")} className={`py-2 rounded-lg text-xs font-bold transition duration-200 flex items-center justify-center gap-1.5 ${vocabSource === "self-input" ? "bg-white text-stone-900 shadow-xs" : "text-stone-500 hover:text-stone-800"}`} id="source-self-btn">
-                    Self-Input List 自訂單字輸入
-                  </button>
+                  <button onClick={() => setVocabSource("system")} className={`py-2 rounded-lg text-xs font-bold transition duration-200 flex items-center justify-center gap-1.5 ${vocabSource === "system" ? "bg-white text-stone-900 shadow-xs" : "text-stone-500 hover:text-stone-800"}`} id="source-system-btn">System Database 系統內建單字庫</button>
+                  <button onClick={() => setVocabSource("self-input")} className={`py-2 rounded-lg text-xs font-bold transition duration-200 flex items-center justify-center gap-1.5 ${vocabSource === "self-input" ? "bg-white text-stone-900 shadow-xs" : "text-stone-500 hover:text-stone-800"}`} id="source-self-btn">Self-Input List 自訂單字輸入</button>
                 </div>
 
                 {vocabSource === "system" ? (
@@ -571,7 +482,6 @@ if (resReadingData.success && resReadingData.data) {
                         <option value={6}>Level 6 (Advanced / 進階級)</option>
                       </select>
                     </div>
-
                     <div className="space-y-1.5 relative" id="unit-select-container">
                       <label className="text-xs font-bold font-sans uppercase text-stone-500">Filter Units (篩選單元)</label>
                       <div className="relative">
@@ -579,7 +489,6 @@ if (resReadingData.success && resReadingData.data) {
                           <span className="truncate">{selectedUnits.length === 0 ? "All Units" : `Selected ${selectedUnits.length} Units`}</span>
                           <span className="text-stone-400 text-[10px]">▼</span>
                         </button>
-
                         {unitsDropdownOpen && (
                           <div className="absolute top-10 right-0 left-0 bg-white border border-stone-200 rounded-xl shadow-md p-3 z-30 max-h-56 overflow-y-auto space-y-2">
                             <div className="flex items-center gap-2 border-b border-stone-100 pb-2">
@@ -599,7 +508,7 @@ if (resReadingData.success && resReadingData.data) {
                                   const isChecked = selectedUnits.includes(unit);
                                   return (
                                     <label key={unit} className="flex items-center gap-2 p-1 hover:bg-stone-50 rounded cursor-pointer text-xs">
-                                      <input type="checkbox" checked={isChecked} onChange={() => { if (isChecked) { setSelectedUnits(selectedUnits.filter(u => u !== unit)); } else { setSelectedUnits([...selectedUnits, unit]); } }} className="rounded border-stone-300 text-teal-700 focus:ring-teal-700 w-3.5 h-3.5" />
+                                      <input type="checkbox" checked={isChecked} onChange={() => { if (isChecked) setSelectedUnits(selectedUnits.filter(u => u !== unit)); else setSelectedUnits([...selectedUnits, unit]); }} className="rounded border-stone-300 text-teal-700 focus:ring-teal-700 w-3.5 h-3.5" />
                                       <span>Unit {unit}</span>
                                     </label>
                                   );
@@ -610,7 +519,6 @@ if (resReadingData.success && resReadingData.data) {
                         )}
                       </div>
                     </div>
-
                     <div className="space-y-1.5 sm:col-span-2 border-t border-stone-100 pt-3 mt-1">
                       <p className="text-xs text-stone-600 font-medium">
                         <span className="text-amber-800 font-bold">{selectedUnits.length === 0 ? availableWords.length : availableWords.filter(w => selectedUnits.includes(w.unit)).length} words</span>{" "}
@@ -622,7 +530,7 @@ if (resReadingData.success && resReadingData.data) {
                   <div className="space-y-2 bg-stone-50/50 p-4 rounded-xl border border-stone-100" id="self-input-container">
                     <div className="flex justify-between items-start gap-4 flex-wrap">
                       <label className="text-xs font-bold font-sans uppercase text-stone-500">Paste Word List (貼上自訂單字表)</label>
-                      <span className="text-[10px] text-amber-900 font-bold bg-amber-50 px-2 py-1 rounded">Format: word POS (one per line) / 格式：單字 詞性 (一行一組)</span>
+                      <span className="text-[10px] text-amber-900 font-bold bg-amber-50 px-2 py-1 rounded">Format: word POS (one per line)</span>
                     </div>
                     <textarea value={selfInputText} onChange={(e) => { setSelfInputText(e.target.value); setSelfInputError(null); }} rows={6} className="w-full bg-white border border-stone-300 hover:border-stone-400 rounded-xl p-3 text-xs font-mono focus:outline-none focus:ring-1 focus:ring-teal-700 transition" placeholder="accommodate v.&#10;vital adj.&#10;system n." id="self-input-textarea" />
                     <div className="flex justify-between items-center text-[10px] text-stone-500 pt-1 flex-wrap gap-2">
@@ -635,18 +543,15 @@ if (resReadingData.success && resReadingData.data) {
                 <div className="border-t border-stone-150 pt-6 space-y-4">
                   <div className="pb-1">
                     <h3 className="text-md font-bold font-display text-stone-900 flex items-center gap-2">
-                      <Settings className="w-5 h-5 text-amber-800" />
-                      Step 2: Choose Mock Quiz Modules / 選擇擬真試卷大題
+                      <Settings className="w-5 h-5 text-amber-800" /> Step 2: Choose Mock Quiz Modules / 選擇擬真試卷大題
                     </h3>
                     <p className="text-xs text-stone-500 mt-1">Select the specific exam sections you wish to compile in your mock worksheet.</p>
                   </div>
-
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4" id="quiz-types-checklist">
                     <label className={`border rounded-xl p-4 flex items-center gap-3 cursor-pointer transition ${selectedExerciseTypes.vocab ? "border-teal-400 bg-teal-50/20" : "border-stone-200 hover:border-stone-300 bg-white"}`}>
                       <input type="checkbox" checked={selectedExerciseTypes.vocab} onChange={() => setSelectedExerciseTypes(prev => ({ ...prev, vocab: !prev.vocab }))} className="rounded border-stone-300 text-teal-700 focus:ring-teal-700 w-4 h-4 shrink-0" id="checkbox-vocab-mcq" />
                       <span className="text-xs font-bold text-stone-900 font-sans">GSAT Vocabulary MCQs (10 Qs) / 詞彙單選題 (10 題)</span>
                     </label>
-
                     <div className={`border rounded-xl p-4 space-y-3 transition ${selectedExerciseTypes.reading ? "border-teal-400 bg-teal-50/20" : "border-stone-200 hover:border-stone-300 bg-white"}`}>
                       <label className="flex items-center gap-3 cursor-pointer">
                         <input type="checkbox" checked={selectedExerciseTypes.reading} onChange={() => setSelectedExerciseTypes(prev => ({ ...prev, reading: !prev.reading }))} className="rounded border-stone-300 text-teal-700 focus:ring-teal-700 w-4 h-4 shrink-0" id="checkbox-reading-comprehension" />
@@ -657,7 +562,7 @@ if (resReadingData.success && resReadingData.data) {
                           {["basic", "essential", "advanced"].map(lvl => {
                             const isLvlChecked = selectedReadingLevels.includes(lvl);
                             return (
-                              <button key={lvl} type="button" onClick={() => { if (isLvlChecked) { setSelectedReadingLevels(selectedReadingLevels.filter(l => l !== lvl)); } else { setSelectedReadingLevels([...selectedReadingLevels, lvl]); } }} className={`py-1.5 px-2 rounded-lg text-[10px] border font-bold capitalize transition duration-150 ${isLvlChecked ? "bg-teal-800 text-white border-teal-800" : "bg-white text-stone-600 border-stone-200 hover:bg-stone-50"}`} id={`reading-lvl-${lvl}-btn`}>
+                              <button key={lvl} type="button" onClick={() => { if (isLvlChecked) setSelectedReadingLevels(selectedReadingLevels.filter(l => l !== lvl)); else setSelectedReadingLevels([...selectedReadingLevels, lvl]); }} className={`py-1.5 px-2 rounded-lg text-[10px] border font-bold capitalize transition duration-150 ${isLvlChecked ? "bg-teal-800 text-white border-teal-800" : "bg-white text-stone-600 border-stone-200 hover:bg-stone-50"}`} id={`reading-lvl-${lvl}-btn`}>
                                 {lvl === "basic" ? "Basic (L1-2)" : lvl === "essential" ? "Essential (L3-4)" : "Advanced (L5-6)"}
                               </button>
                             );
@@ -678,7 +583,6 @@ if (resReadingData.success && resReadingData.data) {
                       </div>
                     </div>
                   )}
-
                   {generationLoading ? (
                     <div className="space-y-4 bg-stone-50 border border-stone-200 rounded-2xl p-6 text-center shadow-inner">
                       <div className="flex justify-center items-center gap-2">
@@ -702,14 +606,12 @@ if (resReadingData.success && resReadingData.data) {
                 <div className="bg-white border border-stone-200 rounded-2xl p-5 shadow-xs space-y-4">
                   <div className="flex justify-between items-center border-b border-stone-100 pb-3">
                     <h3 className="text-xs font-bold font-display uppercase tracking-wider text-stone-900 flex items-center gap-2">
-                      <History className="w-4 h-4 text-amber-800" />
-                      Study History Board (累積備考成就)
+                      <History className="w-4 h-4 text-amber-800" /> Study History Board (累積備考成就)
                     </h3>
                     {studyHistory.length > 0 && (
                       <button onClick={handleClearHistory} className="text-[10px] text-rose-800 hover:underline font-bold" id="clear-logs-btn">Clear All</button>
                     )}
                   </div>
-
                   {studyHistory.length === 0 ? (
                     <div className="text-center py-8 text-stone-400 space-y-2">
                       <Layers className="w-8 h-8 mx-auto stroke-1" />
@@ -747,12 +649,10 @@ if (resReadingData.success && resReadingData.data) {
               </div>
               <div className="flex flex-wrap items-center gap-2 w-full md:w-auto">
                 <button onClick={() => setActiveTab("worksheet")} className="px-4 py-2 bg-stone-100 hover:bg-stone-200 text-stone-700 hover:text-stone-900 rounded-xl text-xs font-semibold flex items-center gap-1.5 border border-stone-200/80 transition" id="player-to-worksheet-tab-btn">
-                  <Printer className="w-4 h-4" />
-                  Print Exam Worksheet
+                  <Printer className="w-4 h-4" /> Print Exam Worksheet
                 </button>
                 <button onClick={handleInteractiveSubmitAnswers} className="px-4 py-2 bg-teal-800 hover:bg-teal-900 text-white rounded-xl text-xs font-semibold flex items-center gap-1.5 shadow-sm transition duration-200" id="submit-exam-suite-btn">
-                  <CheckCircle className="w-4 h-4" />
-                  Submit Answers & Diagnose
+                  <CheckCircle className="w-4 h-4" /> Submit Answers & Diagnose
                 </button>
               </div>
             </div>
@@ -773,14 +673,11 @@ if (resReadingData.success && resReadingData.data) {
                   </button>
                 )}
                 <div className="border-t border-stone-100 pt-3 mt-4 flex flex-col gap-2">
-                  <button onClick={handleInteractiveSubmitAnswers} className="w-full bg-teal-800 hover:bg-teal-900 text-white text-xs font-semibold py-2 rounded-xl transition shadow-xs" id="sbmit-side-btn">
-                    Diagnose Grade Now
-                  </button>
+                  <button onClick={handleInteractiveSubmitAnswers} className="w-full bg-teal-800 hover:bg-teal-900 text-white text-xs font-semibold py-2 rounded-xl transition shadow-xs" id="sbmit-side-btn">Diagnose Grade Now</button>
                 </div>
               </div>
 
               <div className="lg:col-span-9 bg-white border border-stone-200 p-6 md:p-8 rounded-2xl shadow-xs" id="player-exercise-viewport">
-                
                 {currentSection === "vocab" && examSuite.vocabQuestions && (
                   <div className="space-y-6" id="player-vocab-section">
                     <div className="border-b border-stone-100 pb-3 flex justify-between items-center">
@@ -799,7 +696,7 @@ if (resReadingData.success && resReadingData.data) {
                                 const optString = q.options.find((o: string) => o.startsWith(`(${letter})`)) || `(${letter})`;
                                 const isSelected = userSelectedChoice === letter;
                                 return (
-                                  <button key={letter} type="button" onClick={() => { setSession(prev => ({ ...prev, answers: { ...prev.answers, vocab: { ...prev.answers.vocab, [q.id]: letter } } })); }} className={`py-3 px-4 rounded-xl text-xs text-left font-semibold transition border ${isSelected ? "bg-teal-700 text-white border-teal-700 shadow-sm" : "bg-white text-stone-700 border-stone-200 hover:bg-stone-50"}`} id={`player-vocab-q-${qIndex}-opt-${letter}`}>
+                                  <button key={letter} type="button" onClick={() => setSession(prev => ({ ...prev, answers: { ...prev.answers, vocab: { ...prev.answers.vocab, [q.id]: letter } } }))} className={`py-3 px-4 rounded-xl text-xs text-left font-semibold transition border ${isSelected ? "bg-teal-700 text-white border-teal-700 shadow-sm" : "bg-white text-stone-700 border-stone-200 hover:bg-stone-50"}`} id={`player-vocab-q-${qIndex}-opt-${letter}`}>
                                     {optString}
                                   </button>
                                 );
@@ -838,7 +735,7 @@ if (resReadingData.success && resReadingData.data) {
                                     const optStr = q.options.find((o: string) => o.startsWith(`(${letter})`)) || `(${letter})`;
                                     const isSelected = userAns === letter;
                                     return (
-                                      <button key={letter} type="button" onClick={() => { setSession(prev => ({ ...prev, answers: { ...prev.answers, reading: { ...prev.answers.reading, [userKey]: letter } } })); }} className={`py-2 px-4 rounded-lg text-xs text-left font-semibold border transition ${isSelected ? "bg-teal-700 text-white border-teal-700" : "bg-white text-stone-700 border-stone-300 hover:bg-stone-50"}`} id={`player-reading-p-${pIdx}-q-${qIdx}-opt-${letter}`}>
+                                      <button key={letter} type="button" onClick={() => setSession(prev => ({ ...prev, answers: { ...prev.answers, reading: { ...prev.answers.reading, [userKey]: letter } } }))} className={`py-2 px-4 rounded-lg text-xs text-left font-semibold border transition ${isSelected ? "bg-teal-700 text-white border-teal-700" : "bg-white text-stone-700 border-stone-300 hover:bg-stone-50"}`} id={`player-reading-p-${pIdx}-q-${qIdx}-opt-${letter}`}>
                                         {optStr}
                                       </button>
                                     );
@@ -856,8 +753,7 @@ if (resReadingData.success && resReadingData.data) {
                 <div className="border-t border-stone-150 pt-6 mt-12 flex justify-between items-center text-xs">
                   <span className="text-stone-400 font-serif italic">Have faith in your English intuition!</span>
                   <button onClick={handleInteractiveSubmitAnswers} className="px-6 py-3 bg-teal-800 hover:bg-teal-900 text-white font-semibold rounded-2xl flex items-center gap-1.5 shadow-sm transition duration-200" id="submit-answers-footer">
-                    <CheckCircle className="w-4 h-4" />
-                    Submit Final Assessment
+                    <CheckCircle className="w-4 h-4" /> Submit Final Assessment
                   </button>
                 </div>
               </div>
@@ -874,7 +770,7 @@ if (resReadingData.success && resReadingData.data) {
             report={activeReport}
             suite={examSuite}
             onRestart={() => { setExamSuite(null); setActiveTab("lobby"); }}
-            onGoToWorksheet={() => { setActiveTab("worksheet"); }}
+            onGoToWorksheet={() => setActiveTab("worksheet")}
           />
         )}
 
