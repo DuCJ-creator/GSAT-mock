@@ -134,7 +134,7 @@ app.post("/api/generate", async (req, res) => {
    - The single passage MUST be 200-250 words.
    - It MUST be followed by EXACTLY 4 questions.
    - The questions should test global reading skills (e.g., main idea, detail lookup, tone analysis, context-clue inferring, title selection).
-   - The correct answers must be distributed evenly without clustering.
+   - MANDATORY: Distribute the 10 correct answers as: A appears 2-3 times, B appears 2-3 times, C appears 2-3 times, D appears 2-3 times. Count and verify before outputting. Rewrite questions if needed to achieve this distribution.
    - Provide 4 options for each question, each prefixed with (A), (B), (C), (D).
    - Provide complete, concise Traditional Chinese explanations and translate key sentences. Keep explanations clear and high-impact.
 `;
@@ -155,8 +155,13 @@ Ensure that:
 2. Every generated question has no ambiguity. There is exactly one correct answer.
 3. The vocabulary level fits the Taiwan GSAT syllabus (levels 3 to 6).
 4. The explanations are written in elegant Traditional Chinese (繁體中文) following the Taiwanese teaching style.
-5. CRITICAL: Correct answers MUST be distributed evenly across ALL four options (A), (B), (C), (D). For every 4 questions, each letter must appear exactly once. Never cluster answers on the same letter. Actively verify distribution before responding.
-6. ALL passage text must be in English only. Never write passages in Chinese.`;
+5. CRITICAL ANSWER DISTRIBUTION RULE: You MUST distribute correct answers evenly across A, B, C, D.
+   - For 10 vocabulary questions: use each letter at least 2 times. No letter should appear more than 3 times.
+   - For 4 reading questions per passage: use 4 different letters — one question each for A, B, C, D.
+   - Before finalizing, COUNT your answer distribution and REWRITE any questions needed to fix clustering.
+   - NEVER have more than 2 consecutive questions with the same correct answer.
+   - This rule is NON-NEGOTIABLE. Verify distribution before outputting.
+6. ALL passage text must be in English only. Never write passages in Chinese.
 
     const instructionsPrompt = `Please generate the requested GSAT exam exercises based on the following input vocabulary:
 ${vocabString}
