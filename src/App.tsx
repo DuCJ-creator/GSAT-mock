@@ -189,21 +189,31 @@ const normalizeOptions = (opts: any): string[] => {
   let arr: string[] = [];
 
   if (Array.isArray(opts)) {
-    arr = opts;
+    // Handle array of single-key objects: [{"A": "text"}, {"B": "text"}]
+    if (opts.length > 0 && typeof opts[0] === "object" && !Array.isArray(opts[0])) {
+      arr = opts.map((item: any) => {
+        const [key, val] = Object.entries(item)[0];
+        const k = key.startsWith("(") ? key : `(${key})`;
+        return `${k} ${String(val)}`;
+      });
+    } else {
+      arr = opts.map((o: any) => String(o));
+    }
   } else if (typeof opts === "string") {
-    // Handle single string like "(A) compact (B) horizontal (C) infinite (D) naive"
     const matches = opts.match(/\([A-D]\)[^()]*(?=\([A-D]\)|$)/g);
     if (matches) {
       arr = matches.map(s => s.trim());
     } else {
       return ["(A)", "(B)", "(C)", "(D)"];
     }
-} else if (opts && typeof opts === "object") {
-  arr = Object.entries(opts).map(([key, val]) => {
-    const k = key.startsWith("(") ? key : `(${key})`;
-    return `${k} ${String(val)}`;
-  });
-}
+  } else if (opts && typeof opts === "object") {
+    arr = Object.entries(opts).map(([key, val]) => {
+      const k = key.startsWith("(") ? key : `(${key})`;
+      return `${k} ${String(val)}`;
+    });
+  } else {
+    return ["(A)", "(B)", "(C)", "(D)"];
+  }
 
   return arr.map((opt, idx) => {
     const letter = ["A", "B", "C", "D"][idx];
