@@ -198,11 +198,10 @@ const normalizeOptions = (opts: any): string[] => {
     } else {
       return ["(A)", "(B)", "(C)", "(D)"];
     }
- } else if (opts && typeof opts === "object") {
+} else if (opts && typeof opts === "object") {
   arr = Object.entries(opts).map(([key, val]) => {
-    // Handle both "(A)" and "A" style keys
     const k = key.startsWith("(") ? key : `(${key})`;
-    return `${k} ${val}`;
+    return `${k} ${String(val)}`;
   });
 }
 
