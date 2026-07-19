@@ -117,7 +117,7 @@ app.post("/api/generate", async (req, res) => {
       sectionsGuidelines += `
 1. "vocabQuestions": Create EXACTLY 10 GSAT-level English vocabulary multiple-choice questions focusing on the provided vocabulary words or suitable GSAT academic words (if not enough vocab).
    - Ensure the structure and complexity are aligned with Taiwan's GSAT (General Scholastic Ability Test).
-   - The correct answers MUST be evenly distributed among the options (A), (B), (C), (D) without clustering.
+   - CRITICAL: For the 10 questions, distribute correct answers as follows: roughly 2-3 questions each for (A), (B), (C), (D). Verify this distribution before outputting. Never have more than 3 consecutive questions with the same answer.
    - For EACH question, provide exactly four choices, and they must be formatted on a single line prefixing (A), (B), (C), (D).
    - Distractors in the options must not repeat within a question and should be standard high-frequency academic vocabulary.
    - Provide a precise and concise Traditional Chinese explanation containing translation and grammar notes.
@@ -155,7 +155,7 @@ Ensure that:
 2. Every generated question has no ambiguity. There is exactly one correct answer.
 3. The vocabulary level fits the Taiwan GSAT syllabus (levels 3 to 6).
 4. The explanations are written in elegant Traditional Chinese (繁體中文) following the Taiwanese teaching style.
-5. Correct answers are balanced among choices (A, B, C, D) without clustering.
+5. CRITICAL: Correct answers MUST be distributed evenly across ALL four options (A), (B), (C), (D). For every 4 questions, each letter must appear exactly once. Never cluster answers on the same letter. Actively verify distribution before responding.
 6. ALL passage text must be in English only. Never write passages in Chinese.`;
 
     const instructionsPrompt = `Please generate the requested GSAT exam exercises based on the following input vocabulary:
