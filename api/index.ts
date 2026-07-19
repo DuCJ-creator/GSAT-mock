@@ -226,6 +226,33 @@ You MUST follow the specified JSON schema strictly. Make sure all strings are co
 
     if (!outputText) throw new Error("Empty response from AI generation model.");
     const examData = JSON.parse(outputText);
+    // Force even answer distribution for reading passages
+if (examData.readingPassages) {
+  const passages = Array.isArray(examData.readingPassages) 
+    ? examData.readingPassages 
+    : [examData.readingPassages];
+  
+  passages.forEach((p: any) => {
+    if (p.questions && p.questions.length === 4) {
+      const letters = ["A", "B", "C", "D"];
+      const used = new Set<string>();
+      p.questions.forEach((q: any) => {
+        // Normalize answer first
+        const ans = String(q.correctAnswer || q.answer || "A").replace(/[()]/g, "").trim().toUpperCase();
+        if (!used.has(ans) && letters.includes(ans)) {
+          q.correctAnswer = ans;
+          used.add(ans);
+        } else {
+          // Assign an unused letter
+          const unused = letters.find(l => !used.has(l)) || "A";
+          q.correctAnswer = unused;
+          used.add(unused);
+        }
+      });
+    }
+  });
+  examData.readingPassages = passages;
+}
     res.json({ success: true, data: examData });
   } catch (error: any) {
     console.error("GSAT Buffet Generation Error:", error);
