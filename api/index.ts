@@ -1,8 +1,4 @@
 process.env.IS_SERVERLESS = "true";
-/**
- * @license
- * SPDX-License-Identifier: Apache-2.0
- */
 
 import express from "express";
 import path from "path";
@@ -18,24 +14,14 @@ const __dirname = path.dirname(__filename);
 
 const app = express();
 app.use(express.json({ limit: "20mb" }));
-
 const PORT = 3000;
 
 let aiInstance: GoogleGenAI | null = null;
 function getGenAI(): GoogleGenAI {
   if (!aiInstance) {
     const apiKey = process.env.GEMINI_API_KEY;
-    if (!apiKey) {
-      throw new Error("GEMINI_API_KEY is not defined in the environment.");
-    }
-    aiInstance = new GoogleGenAI({
-      apiKey,
-      httpOptions: {
-        headers: {
-          "User-Agent": "aistudio-build",
-        },
-      },
-    });
+    if (!apiKey) throw new Error("GEMINI_API_KEY is not defined in the environment.");
+    aiInstance = new GoogleGenAI({ apiKey, httpOptions: { headers: { "User-Agent": "aistudio-build" } } });
   }
   return aiInstance;
 }
@@ -44,9 +30,7 @@ let openaiInstance: OpenAI | null = null;
 function getOpenAI(): OpenAI {
   if (!openaiInstance) {
     const apiKey = process.env.OPENAI_API_KEY;
-    if (!apiKey) {
-      throw new Error("OPENAI_API_KEY is not defined in the environment.");
-    }
+    if (!apiKey) throw new Error("OPENAI_API_KEY is not defined in the environment.");
     openaiInstance = new OpenAI({ apiKey });
   }
   return openaiInstance;
@@ -54,9 +38,7 @@ function getOpenAI(): OpenAI {
 
 function verifyApiKeys() {
   if (!process.env.GEMINI_API_KEY && !process.env.OPENAI_API_KEY) {
-    throw new Error(
-      "API Configuration Error: Please configure either GEMINI_API_KEY or OPENAI_API_KEY in your server environment."
-    );
+    throw new Error("API Configuration Error: Please configure either GEMINI_API_KEY or OPENAI_API_KEY.");
   }
 }
 
@@ -65,30 +47,19 @@ app.get("/api/health", async (req, res) => {
   const openaiKeyExists = !!process.env.OPENAI_API_KEY;
   let geminiTest = "Not tested";
   let geminiError = null;
-
   if (geminiKeyExists) {
     try {
       const ai = getGenAI();
-      const response = await ai.models.generateContent({
-        model: "gemini-2.5-flash",
-        contents: "Respond with 'ok'",
-      });
+      const response = await ai.models.generateContent({ model: "gemini-2.5-flash", contents: "Respond with 'ok'" });
       geminiTest = response.text || "Empty response";
     } catch (e: any) {
       geminiError = e.message || String(e);
     }
   }
-
   res.json({
     status: "ok",
     message: "GSAT Buffet API is healthy.",
-    env: {
-      geminiKeyExists,
-      geminiKeyLength: process.env.GEMINI_API_KEY ? process.env.GEMINI_API_KEY.length : 0,
-      openaiKeyExists,
-      openaiKeyLength: process.env.OPENAI_API_KEY ? process.env.OPENAI_API_KEY.length : 0,
-      NODE_ENV: process.env.NODE_ENV,
-    },
+    env: { geminiKeyExists, openaiKeyExists, NODE_ENV: process.env.NODE_ENV },
     geminiTest,
     geminiError,
   });
@@ -96,13 +67,7 @@ app.get("/api/health", async (req, res) => {
 
 app.post("/api/generate", async (req, res) => {
   try {
-    const {
-      vocabList,
-      selectedExerciseTypes,
-      selectedReadingLevels,
-      selectedLevel,
-    } = req.body;
-
+    const { vocabList, selectedExerciseTypes, selectedReadingLevels, selectedLevel } = req.body;
     verifyApiKeys();
 
     const vocabString = vocabList && vocabList.length > 0
@@ -115,12 +80,13 @@ app.post("/api/generate", async (req, res) => {
     if (selectedExerciseTypes.vocab) {
       activeSections.push("vocabQuestions");
       sectionsGuidelines += `
-1. "vocabQuestions": Create EXACTLY 10 GSAT-level English vocabulary multiple-choice questions focusing on the provided vocabulary words or suitable GSAT academic words (if not enough vocab).
+1. "vocabQuestions": Create EXACTLY 10 GSAT-level English vocabulary multiple-choice questions.
    - Ensure the structure and complexity are aligned with Taiwan's GSAT (General Scholastic Ability Test).
-   - CRITICAL: For the 10 questions, distribute correct answers as follows: roughly 2-3 questions each for (A), (B), (C), (D). Verify this distribution before outputting. Never have more than 3 consecutive questions with the same answer.
-   - For EACH question, provide exactly four choices, and they must be formatted on a single line prefixing (A), (B), (C), (D).
-   - Distractors in the options must not repeat within a question and should be standard high-frequency academic vocabulary.
-   - Provide a precise and concise Traditional Chinese explanation containing translation and grammar notes.
+   - MANDATORY ANSWER DISTRIBUTION: Distribute the 10 correct answers so each letter appears 2-3 times: A appears 2-3 times, B appears 2-3 times, C appears 2-3 times, D appears 2-3 times. Count and verify before outputting. Rewrite questions if needed.
+   - NEVER have more than 2 consecutive questions with the same correct answer.
+   - For EACH question, provide exactly four choices prefixed with (A), (B), (C), (D).
+   - Distractors must not repeat within a question and should be high-frequency academic vocabulary.
+   - Provide a precise Traditional Chinese explanation containing translation and grammar notes.
 `;
     }
 
@@ -128,40 +94,36 @@ app.post("/api/generate", async (req, res) => {
       activeSections.push("readingPassages");
       sectionsGuidelines += `
 2. "readingPassages": Create EXACTLY ONE reading comprehension passage for the level: ${selectedReadingLevels.join(", ")}.
-   - CRITICAL: The passage text MUST be written in English only. Do NOT write passages in Chinese or any other language.
-   - The passage must be appropriate for Taiwan GSAT (學測) English exam.
+   - CRITICAL: The passage text MUST be written in English only. Do NOT write passages in Chinese.
    - Create ONLY 1 passage total. Do NOT create multiple passages.
    - The single passage MUST be 200-250 words.
    - It MUST be followed by EXACTLY 4 questions.
-   - The questions should test global reading skills (e.g., main idea, detail lookup, tone analysis, context-clue inferring, title selection).
-   - MANDATORY: Distribute the 10 correct answers as: A appears 2-3 times, B appears 2-3 times, C appears 2-3 times, D appears 2-3 times. Count and verify before outputting. Rewrite questions if needed to achieve this distribution.
+   - MANDATORY ANSWER DISTRIBUTION for the 4 questions: use each letter exactly once — one question with answer A, one with B, one with C, one with D. Verify this before outputting.
+   - The questions should test global reading skills (main idea, detail lookup, tone analysis, context-clue inferring).
    - Provide 4 options for each question, each prefixed with (A), (B), (C), (D).
-   - Provide complete, concise Traditional Chinese explanations and translate key sentences. Keep explanations clear and high-impact.
+   - Provide complete Traditional Chinese explanations. Keep explanations clear and concise.
 `;
     }
 
-    const systemPrompt = `You are Tr. Shirley Du, an elite high school English educator in Taiwan specializing in GSAT (英語學測) exam preparation. 
+    const systemPrompt = `You are Tr. Shirley Du, an elite high school English educator in Taiwan specializing in GSAT (English exam) preparation.
 Your tone is encouraging, academically precise, and deeply knowledgeable about Taiwan's testing patterns.
 You will generate high-quality interactive exercises based on the vocabulary words provided.
 Ensure that:
 1. Every generated question and option is 100% grammatically and contextually correct.
-   - For vocabulary questions, ensure the blank can only be filled by the correct option, resulting in a natural, idiomatic, and grammatically perfect English sentence.
-   - Crucial Grammar Rules & High-Frequency Pitfalls to avoid:
-     * NEVER use "cost" with a person as the subject to mean spending money. "Cost" must take the item/activity/trip as its subject.
-     * NEVER use "spend" with an item as the subject.
-     * Ensure correct preposition pairings for English verbs.
-     * Check that passive voice, transitive/intransitive classifications, and participle phrases are perfectly grammatical.
-   - Carefully verify the syntax, grammar, and naturalness of all options and sentence frames.
+   - For vocabulary questions, ensure the blank can only be filled by the correct option.
+   - NEVER use "cost" with a person as the subject to mean spending money.
+   - NEVER use "spend" with an item as the subject.
+   - Ensure correct preposition pairings and grammatical structures.
 2. Every generated question has no ambiguity. There is exactly one correct answer.
 3. The vocabulary level fits the Taiwan GSAT syllabus (levels 3 to 6).
-4. The explanations are written in elegant Traditional Chinese (繁體中文) following the Taiwanese teaching style.
+4. The explanations are written in elegant Traditional Chinese following the Taiwanese teaching style.
 5. CRITICAL ANSWER DISTRIBUTION RULE: You MUST distribute correct answers evenly across A, B, C, D.
-   - For 10 vocabulary questions: use each letter at least 2 times. No letter should appear more than 3 times.
-   - For 4 reading questions per passage: use 4 different letters — one question each for A, B, C, D.
+   - For 10 vocabulary questions: use each letter at least 2 times. No letter more than 3 times.
+   - For 4 reading questions per passage: use all 4 different letters, one question each for A, B, C, D.
    - Before finalizing, COUNT your answer distribution and REWRITE any questions needed to fix clustering.
    - NEVER have more than 2 consecutive questions with the same correct answer.
    - This rule is NON-NEGOTIABLE. Verify distribution before outputting.
-6. ALL passage text must be in English only. Never write passages in Chinese.
+6. ALL passage text must be in English only. Never write passages in Chinese.`;
 
     const instructionsPrompt = `Please generate the requested GSAT exam exercises based on the following input vocabulary:
 ${vocabString}
@@ -173,11 +135,7 @@ ${sectionsGuidelines}
 
 You MUST follow the specified JSON schema strictly. Make sure all strings are correctly closed and the response is clean JSON. Keep explanations concise to ensure fast API responses and prevent serverless timeouts.`;
 
-    const responseSchema: any = {
-      type: Type.OBJECT,
-      properties: {},
-      required: [],
-    };
+    const responseSchema: any = { type: Type.OBJECT, properties: {}, required: [] };
 
     if (selectedExerciseTypes.vocab) {
       responseSchema.properties.vocabQuestions = {
@@ -186,15 +144,15 @@ You MUST follow the specified JSON schema strictly. Make sure all strings are co
           type: Type.OBJECT,
           properties: {
             id: { type: Type.STRING },
-            question: { type: Type.STRING, description: "The sentence containing a blank '__________'. Structure must be GSAT-level complexity." },
+            question: { type: Type.STRING, description: "Sentence with blank '__________'. GSAT-level complexity." },
             options: {
               type: Type.ARRAY,
               items: { type: Type.STRING },
               description: "Exactly 4 options, each prefixed with (A), (B), (C), (D). E.g. ['(A) alleviate', '(B) exaggerate', '(C) devastate', '(D) initiate']"
             },
-            correctAnswer: { type: Type.STRING, description: "Must be 'A', 'B', 'C', or 'D'" },
+            correctAnswer: { type: Type.STRING, description: "Must be 'A', 'B', 'C', or 'D' — a single letter only" },
             wordTested: { type: Type.STRING, description: "The target word tested" },
-            explanation: { type: Type.STRING, description: "Detailed Traditional Chinese explanation mapping grammar, meaning, and translation." }
+            explanation: { type: Type.STRING, description: "Detailed Traditional Chinese explanation." }
           },
           required: ["id", "question", "options", "correctAnswer", "wordTested", "explanation"]
         }
@@ -210,10 +168,10 @@ You MUST follow the specified JSON schema strictly. Make sure all strings are co
           properties: {
             level: { type: Type.STRING, description: "Must be one of: basic, essential, advanced" },
             title: { type: Type.STRING, description: "Title of the passage in English" },
-            passage: { type: Type.STRING, description: "The English content passage (~200-250 words). MUST be in English only." },
+            passage: { type: Type.STRING, description: "English passage ~200-250 words. MUST be in English only." },
             questions: {
               type: Type.ARRAY,
-              description: "Exactly 4 reading comprehension questions",
+              description: "Exactly 4 reading comprehension questions with answers distributed A, B, C, D one each",
               items: {
                 type: Type.OBJECT,
                 properties: {
@@ -222,10 +180,10 @@ You MUST follow the specified JSON schema strictly. Make sure all strings are co
                   options: {
                     type: Type.ARRAY,
                     items: { type: Type.STRING },
-                    description: "Exactly 4 options each prefixed with (A), (B), (C), (D). e.g. ['(A) opt1', '(B) opt2', '(C) opt3', '(D) opt4']"
+                    description: "Exactly 4 options each prefixed with (A), (B), (C), (D)."
                   },
-                  correctAnswer: { type: Type.STRING, description: "Must be 'A', 'B', 'C', or 'D'" },
-                  explanation: { type: Type.STRING, description: "Traditional Chinese detailed analysis of logic, clue tracking, and overall meaning." }
+                  correctAnswer: { type: Type.STRING, description: "Must be 'A', 'B', 'C', or 'D' — a single letter only" },
+                  explanation: { type: Type.STRING, description: "Traditional Chinese detailed analysis." }
                 },
                 required: ["id", "question", "options", "correctAnswer", "explanation"]
               }
@@ -245,7 +203,7 @@ You MUST follow the specified JSON schema strictly. Make sure all strings are co
         model,
         messages: [
           { role: "system", content: systemPrompt },
-          { role: "user", content: instructionsPrompt + "\n\nCRITICAL: You MUST return a single valid JSON object containing only the requested properties. All passage and question text must be in English." }
+          { role: "user", content: instructionsPrompt + "\n\nCRITICAL: Return a single valid JSON object. All passage and question text must be in English. Distribute correct answers evenly across A, B, C, D — verify before outputting." }
         ],
         response_format: { type: "json_object" },
         temperature: 0.7,
@@ -266,21 +224,12 @@ You MUST follow the specified JSON schema strictly. Make sure all strings are co
       outputText = response.text || "";
     }
 
-    if (!outputText) {
-      throw new Error("Empty response from AI generation model.");
-    }
-
+    if (!outputText) throw new Error("Empty response from AI generation model.");
     const examData = JSON.parse(outputText);
-    res.json({
-      success: true,
-      data: examData,
-    });
+    res.json({ success: true, data: examData });
   } catch (error: any) {
     console.error("GSAT Buffet Generation Error:", error);
-    res.status(500).json({
-      success: false,
-      error: error.message || "An unexpected error occurred during exam generation.",
-    });
+    res.status(500).json({ success: false, error: error.message || "An unexpected error occurred during exam generation." });
   }
 });
 
@@ -289,9 +238,9 @@ app.post("/api/evaluate-report", async (req, res) => {
     const { scoreSummary, details, selectedLevel } = req.body;
     verifyApiKeys();
 
-    const systemPrompt = `You are Tr. Shirley Du, an English educator in Taiwan specializing in GSAT (學測英文) preparation.
+    const systemPrompt = `You are Tr. Shirley Du, an English educator in Taiwan specializing in GSAT preparation.
 Your style is extremely warm, caring, humorous, encouraging, and deeply professional.
-You talk in Traditional Chinese (using Taiwan idioms like 衝刺, 奠定基礎, 答對率, 魔鬼細節, 學測大關, 備考 etc.). `;
+You talk in Traditional Chinese (using Taiwan idioms like 衝刺, 奠定基礎, 答對率, 魔鬼細節, 學測大關, 備考 etc.).`;
 
     const userPrompt = `Please write a highly supportive, personalized progress commentary report as Tr. Shirley Du.
 The user's exam performance:
@@ -302,9 +251,9 @@ The user's exam performance:
 
 Provide:
 1. "greeting": A warm greeting addressing the student's status.
-2. "analysis": A highly professional yet heartening section review of what they did well and where their blindspots/demon-in-the-details are.
+2. "analysis": A highly professional yet heartening section review of what they did well and where their blindspots are.
 3. "tips": 3 actionable, highly tactical GSAT English study tips tailored to their score.
-4. "encouragement": A powerful, inspirational closing quote/sentence designed to boost their spirits for the final GSAT battle!
+4. "encouragement": A powerful, inspirational closing quote/sentence designed to boost their spirits!
 
 Keep the response in structured JSON matching this schema:
 {
@@ -322,7 +271,7 @@ Keep the response in structured JSON matching this schema:
         model,
         messages: [
           { role: "system", content: systemPrompt },
-          { role: "user", content: userPrompt + "\n\nCRITICAL: You MUST return a single valid JSON object containing exactly 'greeting', 'analysis', 'tips' (an array of 3 strings), and 'encouragement'." }
+          { role: "user", content: userPrompt + "\n\nCRITICAL: Return a single valid JSON object with exactly 'greeting', 'analysis', 'tips' (array of 3 strings), and 'encouragement'." }
         ],
         response_format: { type: "json_object" },
         temperature: 0.8,
@@ -341,10 +290,7 @@ Keep the response in structured JSON matching this schema:
             properties: {
               greeting: { type: Type.STRING },
               analysis: { type: Type.STRING },
-              tips: {
-                type: Type.ARRAY,
-                items: { type: Type.STRING }
-              },
+              tips: { type: Type.ARRAY, items: { type: Type.STRING } },
               encouragement: { type: Type.STRING }
             },
             required: ["greeting", "analysis", "tips", "encouragement"]
@@ -355,43 +301,26 @@ Keep the response in structured JSON matching this schema:
       outputText = response.text || "";
     }
 
-    if (!outputText) {
-      throw new Error("No response received from evaluation model.");
-    }
-
+    if (!outputText) throw new Error("No response received from evaluation model.");
     const reportData = JSON.parse(outputText);
-    res.json({
-      success: true,
-      data: reportData,
-    });
+    res.json({ success: true, data: reportData });
   } catch (error: any) {
     console.error("GSAT Evaluation Report Error:", error);
-    res.status(500).json({
-      success: false,
-      error: error.message || "An unexpected error occurred during progress evaluation.",
-    });
+    res.status(500).json({ success: false, error: error.message || "An unexpected error occurred during progress evaluation." });
   }
 });
 
 async function startServer() {
   if (process.env.NODE_ENV !== "production") {
     const { createServer: createViteServer } = await import("vite");
-    const vite = await createViteServer({
-      server: { middlewareMode: true },
-      appType: "spa",
-    });
+    const vite = await createViteServer({ server: { middlewareMode: true }, appType: "spa" });
     app.use(vite.middlewares);
   } else {
     const distPath = path.join(process.cwd(), "dist");
     app.use(express.static(distPath));
-    app.get("*", (req, res) => {
-      res.sendFile(path.join(distPath, "index.html"));
-    });
+    app.get("*", (req, res) => { res.sendFile(path.join(distPath, "index.html")); });
   }
-
-  app.listen(PORT, "0.0.0.0", () => {
-    console.log(`[Back-End Services] Running smoothly on http://localhost:${PORT}`);
-  });
+  app.listen(PORT, "0.0.0.0", () => { console.log(`[Back-End Services] Running smoothly on http://localhost:${PORT}`); });
 }
 
 if (!process.env.VERCEL && process.env.IS_SERVERLESS !== "true") {
