@@ -1192,7 +1192,7 @@ export default function WorksheetExport({ suite, onBack }: WorksheetExportProps)
       <div 
         id="printable-paper"
         className="bg-white border border-stone-200 shadow-sm p-8 md:p-12 rounded-2xl max-w-4xl mx-auto leading-relaxed text-stone-900"
-        style={{ fontFamily: "'Times New Roman', Times, serif" }}
+        style={{ fontFamily: "'Times New Roman', Times, serif", fontSize: "14px" }}
       >
         {/* Header Block */}
         <div className="border-b-2 border-stone-800 pb-6 mb-8 text-center relative">
