@@ -253,6 +253,30 @@ if (examData.readingPassages) {
   });
   examData.readingPassages = passages;
 }
+    // Force even answer distribution for vocab questions
+if (examData.vocabQuestions && examData.vocabQuestions.length === 10) {
+  const letters = ["A", "B", "C", "D"];
+  // Target: each letter appears 2-3 times across 10 questions
+  const targetCounts: Record<string, number> = { A: 3, B: 3, C: 2, D: 2 };
+  const used: Record<string, number> = { A: 0, B: 0, C: 0, D: 0 };
+
+  examData.vocabQuestions.forEach((q: any) => {
+    const ans = String(q.correctAnswer || q.answer || "A").replace(/[()]/g, "").trim().toUpperCase();
+    if (letters.includes(ans) && used[ans] < targetCounts[ans]) {
+      q.correctAnswer = ans;
+      used[ans]++;
+    } else {
+      // Find a letter that still has quota
+      const available = letters.find(l => used[l] < targetCounts[l]);
+      if (available) {
+        q.correctAnswer = available;
+        used[available]++;
+      } else {
+        q.correctAnswer = ans;
+      }
+    }
+  });
+}
     res.json({ success: true, data: examData });
   } catch (error: any) {
     console.error("GSAT Buffet Generation Error:", error);
