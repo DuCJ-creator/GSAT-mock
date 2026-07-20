@@ -42,6 +42,109 @@ function verifyApiKeys() {
   }
 }
 
+// Normalize a single answer string to bare letter: "(A)" or "A" -> "A"
+function normalizeAnswerLetter(ans: any): string {
+  return String(ans || "A").replace(/[()]/g, "").trim().toUpperCase();
+}
+
+// Normalize options array to ["(A) text", "(B) text", "(C) text", "(D) text"]
+function normalizeOptionsArray(opts: any): string[] {
+  const letters = ["A", "B", "C", "D"];
+  let arr: string[] = [];
+
+  if (Array.isArray(opts)) {
+    if (opts.length > 0 && typeof opts[0] === "object" && opts[0] !== null) {
+      arr = opts.map((item: any) => {
+        const entries = Object.entries(item);
+        if (entries.length === 0) return "";
+        const [key, val] = entries[0];
+        const k = key.startsWith("(") ? key : `(${key})`;
+        return `${k} ${String(val)}`;
+      });
+    } else {
+      arr = opts.map((o: any) => String(o));
+    }
+  } else if (typeof opts === "string") {
+    const matches = opts.match(/\([A-D]\)[^()]*(?=\([A-D]\)|$)/g);
+    arr = matches ? matches.map(s => s.trim()) : ["(A)", "(B)", "(C)", "(D)"];
+  } else if (opts && typeof opts === "object") {
+    arr = Object.entries(opts).map(([key, val]) => {
+      const k = key.startsWith("(") ? key : `(${key})`;
+      return `${k} ${String(val)}`;
+    });
+  } else {
+    return ["(A)", "(B)", "(C)", "(D)"];
+  }
+
+  return arr.map((opt, idx) => {
+    const letter = letters[idx];
+    const s = String(opt).trim();
+    if (s.startsWith(`(${letter})`)) return s;
+    if (s.match(/^\([A-D]\)/)) return s;
+    return `(${letter}) ${s}`;
+  });
+}
+
+// Shuffle options so correct answer lands on targetLetter, updating correctAnswer accordingly
+function shuffleOptionsToTarget(
+  options: string[],
+  currentCorrect: string,
+  targetLetter: string
+): { options: string[]; correctAnswer: string } {
+  const letters = ["A", "B", "C", "D"];
+  const currentIdx = letters.indexOf(currentCorrect);
+  const targetIdx = letters.indexOf(targetLetter);
+
+  if (currentIdx === -1 || targetIdx === -1 || currentIdx === targetIdx) {
+    return { options, correctAnswer: currentCorrect };
+  }
+
+  // Extract bare text from each option
+  const texts = options.map(o => o.replace(/^\([A-D]\)\s*/, "").trim());
+
+  // Swap the texts at currentIdx and targetIdx
+  const temp = texts[currentIdx];
+  texts[currentIdx] = texts[targetIdx];
+  texts[targetIdx] = temp;
+
+  // Re-prefix all options
+  const newOptions = texts.map((text, idx) => `(${letters[idx]}) ${text}`);
+
+  return { options: newOptions, correctAnswer: targetLetter };
+}
+
+// Force even distribution of correct answers across 10 vocab questions: A=3, B=3, C=2, D=2 (shuffled pattern)
+function enforceVocabDistribution(questions: any[]): any[] {
+  if (!questions || questions.length !== 10) return questions;
+
+  const letters = ["A", "B", "C", "D"];
+  // Target distribution pattern - spread evenly
+  const targetSequence = ["A", "B", "C", "D", "A", "B", "C", "D", "A", "B"];
+
+  return questions.map((q: any, idx: number) => {
+    const targetLetter = targetSequence[idx];
+    const currentCorrect = normalizeAnswerLetter(q.correctAnswer || q.answer);
+    const normalizedOpts = normalizeOptionsArray(q.options || q.choices);
+    const { options, correctAnswer } = shuffleOptionsToTarget(normalizedOpts, currentCorrect, targetLetter);
+    return { ...q, options, correctAnswer };
+  });
+}
+
+// Force each passage's 4 questions to have answers A, B, C, D exactly once
+function enforceReadingDistribution(questions: any[]): any[] {
+  if (!questions || questions.length !== 4) return questions;
+
+  const targetSequence = ["A", "B", "C", "D"];
+
+  return questions.map((q: any, idx: number) => {
+    const targetLetter = targetSequence[idx];
+    const currentCorrect = normalizeAnswerLetter(q.correctAnswer || q.answer);
+    const normalizedOpts = normalizeOptionsArray(q.options || q.choices);
+    const { options, correctAnswer } = shuffleOptionsToTarget(normalizedOpts, currentCorrect, targetLetter);
+    return { ...q, options, correctAnswer };
+  });
+}
+
 app.get("/api/health", async (req, res) => {
   const geminiKeyExists = !!process.env.GEMINI_API_KEY;
   const openaiKeyExists = !!process.env.OPENAI_API_KEY;
@@ -82,11 +185,10 @@ app.post("/api/generate", async (req, res) => {
       sectionsGuidelines += `
 1. "vocabQuestions": Create EXACTLY 10 GSAT-level English vocabulary multiple-choice questions.
    - Ensure the structure and complexity are aligned with Taiwan's GSAT (General Scholastic Ability Test).
-   - MANDATORY ANSWER DISTRIBUTION: Distribute the 10 correct answers so each letter appears 2-3 times: A appears 2-3 times, B appears 2-3 times, C appears 2-3 times, D appears 2-3 times. Count and verify before outputting. Rewrite questions if needed.
-   - NEVER have more than 2 consecutive questions with the same correct answer.
    - For EACH question, provide exactly four choices prefixed with (A), (B), (C), (D).
    - Distractors must not repeat within a question and should be high-frequency academic vocabulary.
    - Provide a precise Traditional Chinese explanation containing translation and grammar notes.
+   - The correct answer must match one of the four options provided.
 `;
     }
 
@@ -98,9 +200,9 @@ app.post("/api/generate", async (req, res) => {
    - Create ONLY 1 passage total. Do NOT create multiple passages.
    - The single passage MUST be 200-250 words.
    - It MUST be followed by EXACTLY 4 questions.
-   - MANDATORY ANSWER DISTRIBUTION for the 4 questions: use each letter exactly once — one question with answer A, one with B, one with C, one with D. Verify this before outputting.
    - The questions should test global reading skills (main idea, detail lookup, tone analysis, context-clue inferring).
    - Provide 4 options for each question, each prefixed with (A), (B), (C), (D).
+   - The correct answer must match one of the four options provided.
    - Provide complete Traditional Chinese explanations. Keep explanations clear and concise.
 `;
     }
@@ -117,13 +219,8 @@ Ensure that:
 2. Every generated question has no ambiguity. There is exactly one correct answer.
 3. The vocabulary level fits the Taiwan GSAT syllabus (levels 3 to 6).
 4. The explanations are written in elegant Traditional Chinese following the Taiwanese teaching style.
-5. CRITICAL ANSWER DISTRIBUTION RULE: You MUST distribute correct answers evenly across A, B, C, D.
-   - For 10 vocabulary questions: use each letter at least 2 times. No letter more than 3 times.
-   - For 4 reading questions per passage: use all 4 different letters, one question each for A, B, C, D.
-   - Before finalizing, COUNT your answer distribution and REWRITE any questions needed to fix clustering.
-   - NEVER have more than 2 consecutive questions with the same correct answer.
-   - This rule is NON-NEGOTIABLE. Verify distribution before outputting.
-6. ALL passage text must be in English only. Never write passages in Chinese.`;
+5. ALL passage text must be in English only. Never write passages in Chinese.
+6. The correctAnswer field must always be a single bare letter: A, B, C, or D (no parentheses).`;
 
     const instructionsPrompt = `Please generate the requested GSAT exam exercises based on the following input vocabulary:
 ${vocabString}
@@ -148,9 +245,9 @@ You MUST follow the specified JSON schema strictly. Make sure all strings are co
             options: {
               type: Type.ARRAY,
               items: { type: Type.STRING },
-              description: "Exactly 4 options, each prefixed with (A), (B), (C), (D). E.g. ['(A) alleviate', '(B) exaggerate', '(C) devastate', '(D) initiate']"
+              description: "Exactly 4 options, each prefixed with (A), (B), (C), (D)."
             },
-            correctAnswer: { type: Type.STRING, description: "Must be 'A', 'B', 'C', or 'D' — a single letter only" },
+            correctAnswer: { type: Type.STRING, description: "Single bare letter: A, B, C, or D" },
             wordTested: { type: Type.STRING, description: "The target word tested" },
             explanation: { type: Type.STRING, description: "Detailed Traditional Chinese explanation." }
           },
@@ -171,7 +268,7 @@ You MUST follow the specified JSON schema strictly. Make sure all strings are co
             passage: { type: Type.STRING, description: "English passage ~200-250 words. MUST be in English only." },
             questions: {
               type: Type.ARRAY,
-              description: "Exactly 4 reading comprehension questions with answers distributed A, B, C, D one each",
+              description: "Exactly 4 reading comprehension questions",
               items: {
                 type: Type.OBJECT,
                 properties: {
@@ -182,7 +279,7 @@ You MUST follow the specified JSON schema strictly. Make sure all strings are co
                     items: { type: Type.STRING },
                     description: "Exactly 4 options each prefixed with (A), (B), (C), (D)."
                   },
-                  correctAnswer: { type: Type.STRING, description: "Must be 'A', 'B', 'C', or 'D' — a single letter only" },
+                  correctAnswer: { type: Type.STRING, description: "Single bare letter: A, B, C, or D" },
                   explanation: { type: Type.STRING, description: "Traditional Chinese detailed analysis." }
                 },
                 required: ["id", "question", "options", "correctAnswer", "explanation"]
@@ -203,7 +300,7 @@ You MUST follow the specified JSON schema strictly. Make sure all strings are co
         model,
         messages: [
           { role: "system", content: systemPrompt },
-          { role: "user", content: instructionsPrompt + "\n\nCRITICAL: Return a single valid JSON object. All passage and question text must be in English. Distribute correct answers evenly across A, B, C, D — verify before outputting." }
+          { role: "user", content: instructionsPrompt + "\n\nCRITICAL: Return a single valid JSON object. All passage and question text must be in English. correctAnswer must always be a single bare letter A, B, C, or D." }
         ],
         response_format: { type: "json_object" },
         temperature: 0.7,
@@ -225,58 +322,25 @@ You MUST follow the specified JSON schema strictly. Make sure all strings are co
     }
 
     if (!outputText) throw new Error("Empty response from AI generation model.");
-    const examData = JSON.parse(outputText);
-    // Force even answer distribution for reading passages
-if (examData.readingPassages) {
-  const passages = Array.isArray(examData.readingPassages) 
-    ? examData.readingPassages 
-    : [examData.readingPassages];
-  
-  passages.forEach((p: any) => {
-    if (p.questions && p.questions.length === 4) {
-      const letters = ["A", "B", "C", "D"];
-      const used = new Set<string>();
-      p.questions.forEach((q: any) => {
-        // Normalize answer first
-        const ans = String(q.correctAnswer || q.answer || "A").replace(/[()]/g, "").trim().toUpperCase();
-        if (!used.has(ans) && letters.includes(ans)) {
-          q.correctAnswer = ans;
-          used.add(ans);
-        } else {
-          // Assign an unused letter
-          const unused = letters.find(l => !used.has(l)) || "A";
-          q.correctAnswer = unused;
-          used.add(unused);
-        }
-      });
-    }
-  });
-  examData.readingPassages = passages;
-}
-    // Force even answer distribution for vocab questions
-if (examData.vocabQuestions && examData.vocabQuestions.length === 10) {
-  const letters = ["A", "B", "C", "D"];
-  // Target: each letter appears 2-3 times across 10 questions
-  const targetCounts: Record<string, number> = { A: 3, B: 3, C: 2, D: 2 };
-  const used: Record<string, number> = { A: 0, B: 0, C: 0, D: 0 };
 
-  examData.vocabQuestions.forEach((q: any) => {
-    const ans = String(q.correctAnswer || q.answer || "A").replace(/[()]/g, "").trim().toUpperCase();
-    if (letters.includes(ans) && used[ans] < targetCounts[ans]) {
-      q.correctAnswer = ans;
-      used[ans]++;
-    } else {
-      // Find a letter that still has quota
-      const available = letters.find(l => used[l] < targetCounts[l]);
-      if (available) {
-        q.correctAnswer = available;
-        used[available]++;
-      } else {
-        q.correctAnswer = ans;
-      }
+    const examData = JSON.parse(outputText);
+
+    // Post-process: enforce even answer distribution by shuffling options to match target sequence
+    // This guarantees correctAnswer matches the actual correct option text
+    if (examData.vocabQuestions) {
+      examData.vocabQuestions = enforceVocabDistribution(examData.vocabQuestions);
     }
-  });
-}
+
+    // Handle both readingPassages (array/object) and readingPassage (singular)
+    if (examData.readingPassages || examData.readingPassage) {
+      let passages = examData.readingPassages || examData.readingPassage;
+      if (!Array.isArray(passages)) passages = [passages];
+      examData.readingPassages = passages.map((p: any) => ({
+        ...p,
+        questions: enforceReadingDistribution(p.questions || [])
+      }));
+    }
+
     res.json({ success: true, data: examData });
   } catch (error: any) {
     console.error("GSAT Buffet Generation Error:", error);
@@ -306,13 +370,7 @@ Provide:
 3. "tips": 3 actionable, highly tactical GSAT English study tips tailored to their score.
 4. "encouragement": A powerful, inspirational closing quote/sentence designed to boost their spirits!
 
-Keep the response in structured JSON matching this schema:
-{
-  "greeting": "string",
-  "analysis": "string",
-  "tips": ["tip1", "tip2", "tip3"],
-  "encouragement": "string"
-}`;
+Return structured JSON with exactly these fields: greeting, analysis, tips (array of 3 strings), encouragement.`;
 
     let outputText = "";
     if (process.env.OPENAI_API_KEY) {
@@ -371,7 +429,9 @@ async function startServer() {
     app.use(express.static(distPath));
     app.get("*", (req, res) => { res.sendFile(path.join(distPath, "index.html")); });
   }
-  app.listen(PORT, "0.0.0.0", () => { console.log(`[Back-End Services] Running smoothly on http://localhost:${PORT}`); });
+  app.listen(PORT, "0.0.0.0", () => {
+    console.log(`[Back-End Services] Running smoothly on http://localhost:${PORT}`);
+  });
 }
 
 if (!process.env.VERCEL && process.env.IS_SERVERLESS !== "true") {
