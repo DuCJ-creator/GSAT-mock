@@ -42,12 +42,54 @@ function verifyApiKeys() {
   }
 }
 
-// Normalize a single answer string to bare letter: "(A)" or "A" -> "A"
+// Fisher-Yates shuffle
+function shuffleArray<T>(arr: T[]): T[] {
+  const a = [...arr];
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
+
+// Generate a random balanced sequence of n answers from letters pool
+// Ensures no letter appears more than ceil(n/4)+1 times and no 3 consecutive same letters
+function generateBalancedSequence(n: number): string[] {
+  const letters = ["A", "B", "C", "D"];
+  const base = Math.floor(n / 4);
+  const remainder = n % 4;
+
+  // Build pool: each letter appears base times, remainder letters get one extra
+  const extraLetters = shuffleArray([...letters]).slice(0, remainder);
+  let pool: string[] = [];
+  for (const l of letters) {
+    const count = base + (extraLetters.includes(l) ? 1 : 0);
+    for (let i = 0; i < count; i++) pool.push(l);
+  }
+  pool = shuffleArray(pool);
+
+  // Fix any 3+ consecutive same letters by swapping
+  for (let i = 2; i < pool.length; i++) {
+    if (pool[i] === pool[i - 1] && pool[i] === pool[i - 2]) {
+      // Find a different letter to swap with
+      for (let j = i + 1; j < pool.length; j++) {
+        if (pool[j] !== pool[i]) {
+          [pool[i], pool[j]] = [pool[j], pool[i]];
+          break;
+        }
+      }
+    }
+  }
+
+  return pool;
+}
+
+// Normalize answer to bare letter
 function normalizeAnswerLetter(ans: any): string {
   return String(ans || "A").replace(/[()]/g, "").trim().toUpperCase();
 }
 
-// Normalize options array to ["(A) text", "(B) text", "(C) text", "(D) text"]
+// Normalize options to ["(A) text", "(B) text", ...]
 function normalizeOptionsArray(opts: any): string[] {
   const letters = ["A", "B", "C", "D"];
   let arr: string[] = [];
@@ -85,8 +127,8 @@ function normalizeOptionsArray(opts: any): string[] {
   });
 }
 
-// Shuffle options so correct answer lands on targetLetter, updating correctAnswer accordingly
-function shuffleOptionsToTarget(
+// Move correct option to targetLetter position by swapping option texts
+function moveCorrectToTarget(
   options: string[],
   currentCorrect: string,
   targetLetter: string
@@ -99,48 +141,45 @@ function shuffleOptionsToTarget(
     return { options, correctAnswer: currentCorrect };
   }
 
-  // Extract bare text from each option
+  // Extract bare text from each option (strip "(A) " prefix)
   const texts = options.map(o => o.replace(/^\([A-D]\)\s*/, "").trim());
 
-  // Swap the texts at currentIdx and targetIdx
+  // Swap texts at the two positions
   const temp = texts[currentIdx];
   texts[currentIdx] = texts[targetIdx];
   texts[targetIdx] = temp;
 
-  // Re-prefix all options
+  // Re-apply letter prefixes
   const newOptions = texts.map((text, idx) => `(${letters[idx]}) ${text}`);
 
   return { options: newOptions, correctAnswer: targetLetter };
 }
 
-// Force even distribution of correct answers across 10 vocab questions: A=3, B=3, C=2, D=2 (shuffled pattern)
+// Enforce balanced, randomized answer distribution for vocab (10 questions)
 function enforceVocabDistribution(questions: any[]): any[] {
-  if (!questions || questions.length !== 10) return questions;
-
-  const letters = ["A", "B", "C", "D"];
-  // Target distribution pattern - spread evenly
-  const targetSequence = ["A", "B", "C", "D", "A", "B", "C", "D", "A", "B"];
+  if (!questions || questions.length === 0) return questions;
+  const targetSequence = generateBalancedSequence(questions.length);
 
   return questions.map((q: any, idx: number) => {
     const targetLetter = targetSequence[idx];
     const currentCorrect = normalizeAnswerLetter(q.correctAnswer || q.answer);
     const normalizedOpts = normalizeOptionsArray(q.options || q.choices);
-    const { options, correctAnswer } = shuffleOptionsToTarget(normalizedOpts, currentCorrect, targetLetter);
+    const { options, correctAnswer } = moveCorrectToTarget(normalizedOpts, currentCorrect, targetLetter);
     return { ...q, options, correctAnswer };
   });
 }
 
-// Force each passage's 4 questions to have answers A, B, C, D exactly once
+// Enforce balanced, randomized answer distribution for reading (4 questions per passage)
 function enforceReadingDistribution(questions: any[]): any[] {
-  if (!questions || questions.length !== 4) return questions;
-
-  const targetSequence = ["A", "B", "C", "D"];
+  if (!questions || questions.length === 0) return questions;
+  // For 4 questions: use all 4 letters exactly once, shuffled randomly
+  const targetSequence = shuffleArray(["A", "B", "C", "D"]);
 
   return questions.map((q: any, idx: number) => {
     const targetLetter = targetSequence[idx];
     const currentCorrect = normalizeAnswerLetter(q.correctAnswer || q.answer);
     const normalizedOpts = normalizeOptionsArray(q.options || q.choices);
-    const { options, correctAnswer } = shuffleOptionsToTarget(normalizedOpts, currentCorrect, targetLetter);
+    const { options, correctAnswer } = moveCorrectToTarget(normalizedOpts, currentCorrect, targetLetter);
     return { ...q, options, correctAnswer };
   });
 }
@@ -188,7 +227,7 @@ app.post("/api/generate", async (req, res) => {
    - For EACH question, provide exactly four choices prefixed with (A), (B), (C), (D).
    - Distractors must not repeat within a question and should be high-frequency academic vocabulary.
    - Provide a precise Traditional Chinese explanation containing translation and grammar notes.
-   - The correct answer must match one of the four options provided.
+   - The correctAnswer field must be a single bare letter: A, B, C, or D matching one of the four options.
 `;
     }
 
@@ -202,8 +241,8 @@ app.post("/api/generate", async (req, res) => {
    - It MUST be followed by EXACTLY 4 questions.
    - The questions should test global reading skills (main idea, detail lookup, tone analysis, context-clue inferring).
    - Provide 4 options for each question, each prefixed with (A), (B), (C), (D).
-   - The correct answer must match one of the four options provided.
-   - Provide complete Traditional Chinese explanations. Keep explanations clear and concise.
+   - The correctAnswer field must be a single bare letter: A, B, C, or D matching one of the four options.
+   - Provide complete Traditional Chinese explanations.
 `;
     }
 
@@ -220,7 +259,7 @@ Ensure that:
 3. The vocabulary level fits the Taiwan GSAT syllabus (levels 3 to 6).
 4. The explanations are written in elegant Traditional Chinese following the Taiwanese teaching style.
 5. ALL passage text must be in English only. Never write passages in Chinese.
-6. The correctAnswer field must always be a single bare letter: A, B, C, or D (no parentheses).`;
+6. The correctAnswer field must always be a single bare letter with no parentheses: A, B, C, or D.`;
 
     const instructionsPrompt = `Please generate the requested GSAT exam exercises based on the following input vocabulary:
 ${vocabString}
@@ -300,7 +339,7 @@ You MUST follow the specified JSON schema strictly. Make sure all strings are co
         model,
         messages: [
           { role: "system", content: systemPrompt },
-          { role: "user", content: instructionsPrompt + "\n\nCRITICAL: Return a single valid JSON object. All passage and question text must be in English. correctAnswer must always be a single bare letter A, B, C, or D." }
+          { role: "user", content: instructionsPrompt + "\n\nCRITICAL: Return a single valid JSON object. All passage and question text must be in English. correctAnswer must be a single bare letter A, B, C, or D with no parentheses." }
         ],
         response_format: { type: "json_object" },
         temperature: 0.7,
@@ -325,13 +364,12 @@ You MUST follow the specified JSON schema strictly. Make sure all strings are co
 
     const examData = JSON.parse(outputText);
 
-    // Post-process: enforce even answer distribution by shuffling options to match target sequence
-    // This guarantees correctAnswer matches the actual correct option text
+    // Post-process: enforce randomized but balanced answer distribution
+    // by physically swapping option texts so correct option matches target letter
     if (examData.vocabQuestions) {
       examData.vocabQuestions = enforceVocabDistribution(examData.vocabQuestions);
     }
 
-    // Handle both readingPassages (array/object) and readingPassage (singular)
     if (examData.readingPassages || examData.readingPassage) {
       let passages = examData.readingPassages || examData.readingPassage;
       if (!Array.isArray(passages)) passages = [passages];
@@ -439,3 +477,5 @@ if (!process.env.VERCEL && process.env.IS_SERVERLESS !== "true") {
 }
 
 export default app;
+
+
