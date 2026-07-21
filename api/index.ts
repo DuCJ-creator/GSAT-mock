@@ -477,5 +477,3 @@ if (!process.env.VERCEL && process.env.IS_SERVERLESS !== "true") {
 }
 
 export default app;
-
-
