@@ -256,8 +256,10 @@ export default function App() {
         console.log("RAW Q1 options:", JSON.stringify(resVocabData.data?.vocabQuestions?.[0]?.options));
 
         if (resVocabData.success && resVocabData.data && resVocabData.data.vocabQuestions) {
-          finalSuiteData.vocabQuestions = resVocabData.data.vocabQuestions.map((q: any) => ({
+          const ts = Date.now();
+          finalSuiteData.vocabQuestions = resVocabData.data.vocabQuestions.map((q: any, idx: number) => ({
             ...q,
+            id: `vocab-${idx}-${ts}`,
             options: normalizeOptions(q.options || q.choices),
             correctAnswer: normalizeAnswer(q.correctAnswer || q.answer)
           }));
@@ -299,10 +301,12 @@ export default function App() {
             }
 
             if (passages && passages.length > 0 && passages[0]) {
+              const rts = Date.now();
               const passage = {
                 ...passages[0],
-                questions: (passages[0].questions || []).map((q: any) => ({
+                questions: (passages[0].questions || []).map((q: any, qIdx: number) => ({
                   ...q,
+                  id: `reading-${lvl}-${qIdx}-${rts}`,
                   options: normalizeOptions(q.options || q.choices),
                   correctAnswer: normalizeAnswer(q.correctAnswer || q.answer)
                 }))
