@@ -6,6 +6,7 @@ import { fileURLToPath } from "url";
 import { GoogleGenAI, Type } from "@google/genai";
 import OpenAI from "openai";
 import dotenv from "dotenv";
+import { randomInt } from "crypto";
 
 dotenv.config();
 
@@ -95,40 +96,88 @@ function getOptionTexts(options: any): string[] {
   return normalizeOptionsArray(options).map(stripOptionLabel);
 }
 
-function rotate<T>(items: T[], amount: number): T[] {
-  if (items.length === 0) return items;
-  const n = ((amount % items.length) + items.length) % items.length;
-  return [...items.slice(n), ...items.slice(0, n)];
+function shuffle<T>(items: T[]): T[] {
+  const result = [...items];
+  for (let i = result.length - 1; i > 0; i--) {
+    const j = randomInt(i + 1);
+    [result[i], result[j]] = [result[j], result[i]];
+  }
+  return result;
+}
+
+function hasThreeConsecutive(pattern: AnswerLetter[]): boolean {
+  return pattern.some((letter, index) =>
+    index >= 2 && letter === pattern[index - 1] && letter === pattern[index - 2]
+  );
+}
+
+function hasObviousCycle(pattern: AnswerLetter[]): boolean {
+  const text = pattern.join("");
+  const cycles = ["ABCD", "BCDA", "CDAB", "DABC", "DCBA", "CBAD", "BADC", "ADCB"];
+  return cycles.some(cycle => text.includes(cycle + cycle.slice(0, Math.max(0, text.length - 4))));
+}
+
+function makeBalancedUnpredictablePattern(count: number): AnswerLetter[] {
+  if (count <= 0) return [];
+
+  const base = Math.floor(count / ANSWER_LETTERS.length);
+  const remainder = count % ANSWER_LETTERS.length;
+  const extraLetters = shuffle([...ANSWER_LETTERS]).slice(0, remainder);
+  const pool: AnswerLetter[] = [];
+
+  for (const letter of ANSWER_LETTERS) {
+    const copies = base + (extraLetters.includes(letter) ? 1 : 0);
+    for (let i = 0; i < copies; i++) pool.push(letter);
+  }
+
+  // Four-question reading sets contain one of each answer, but never use the
+  // conspicuous ABCD or DCBA ordering. Larger sets are balanced within one.
+  for (let attempt = 0; attempt < 500; attempt++) {
+    const candidate = shuffle(pool);
+    const text = candidate.join("");
+    const tooObviousFour = count === 4 && (text === "ABCD" || text === "DCBA");
+    if (!tooObviousFour && !hasThreeConsecutive(candidate) && !hasObviousCycle(candidate)) {
+      return candidate;
+    }
+  }
+
+  // The fallback is still balanced. Rotate a shuffled pool to avoid a fixed
+  // deterministic sequence if the stricter search is exhausted.
+  const fallback = shuffle(pool);
+  const shift = fallback.length > 1 ? randomInt(fallback.length) : 0;
+  return [...fallback.slice(shift), ...fallback.slice(0, shift)];
 }
 
 /**
- * Moves the already-validated correct option to a requested letter. This changes
- * presentation order only; it does not change question meaning.
+ * Repositions the actual keyed option. The answer letter is derived only after
+ * the option text has been moved; it is never changed independently.
  */
-function placeCorrectAnswerAt(q: any, desired: AnswerLetter, questionIndex: number): any {
+function placeCorrectAnswerAt(q: any, desired: AnswerLetter): any {
   const options = getOptionTexts(q.options || q.choices);
   const originalAnswer = normalizeAnswerLetter(q.correctAnswer || q.answer);
-  const correctIndex = ANSWER_LETTERS.indexOf(originalAnswer);
-  const correctText = options[correctIndex];
-  const distractors = rotate(
-    options.filter((_, index) => index !== correctIndex),
-    questionIndex % 3
-  );
+  const originalIndex = ANSWER_LETTERS.indexOf(originalAnswer);
+  const correctText = options[originalIndex];
 
+  if (!correctText) {
+    throw new Error("The original answer key does not point to a valid option.");
+  }
+
+  const distractors = shuffle(options.filter((_, index) => index !== originalIndex));
   const desiredIndex = ANSWER_LETTERS.indexOf(desired);
   const reordered = [...distractors];
   reordered.splice(desiredIndex, 0, correctText);
 
+  const keyedTextAfterMove = reordered[desiredIndex];
+  if (keyedTextAfterMove !== correctText) {
+    throw new Error("Answer-key integrity check failed while repositioning options.");
+  }
+
   return {
     ...q,
     options: reordered.map((text, index) => `(${ANSWER_LETTERS[index]}) ${text}`),
-    correctAnswer: desired,
+    correctAnswer: ANSWER_LETTERS[desiredIndex],
+    answerText: correctText,
   };
-}
-
-function balancedPattern(count: number, offset = 0): AnswerLetter[] {
-  // Round-robin guarantees that answer counts differ by at most one.
-  return Array.from({ length: count }, (_, index) => ANSWER_LETTERS[(index + offset) % 4]);
 }
 
 function validateQuestion(q: any, kind: "vocab" | "reading"): string[] {
@@ -227,11 +276,18 @@ function normalizeGeneratedData(data: any): any {
   const normalized = { ...data };
 
   if (normalized.vocabQuestions) {
-    normalized.vocabQuestions = normalized.vocabQuestions.map((q: any) => ({
-      ...q,
-      options: normalizeOptionsArray(q.options || q.choices),
-      correctAnswer: normalizeAnswerLetter(q.correctAnswer || q.answer),
-    }));
+    normalized.vocabQuestions = normalized.vocabQuestions.map((q: any) => {
+      const options = normalizeOptionsArray(q.options || q.choices);
+      const correctAnswer = normalizeAnswerLetter(q.correctAnswer || q.answer);
+      const correctIndex = ANSWER_LETTERS.indexOf(correctAnswer);
+      return {
+        ...q,
+        options,
+        correctAnswer,
+        wordTested: String(q.wordTested || "").trim(),
+        answerText: stripOptionLabel(options[correctIndex]),
+      };
+    });
   }
 
   if (normalized.readingPassage && !normalized.readingPassages) {
@@ -258,19 +314,20 @@ function balanceAnswerPositions(data: any): any {
   const balanced = { ...data };
 
   if (Array.isArray(balanced.vocabQuestions)) {
-    const pattern = balancedPattern(balanced.vocabQuestions.length, 0);
+    const pattern = makeBalancedUnpredictablePattern(balanced.vocabQuestions.length);
     balanced.vocabQuestions = balanced.vocabQuestions.map((q: any, index: number) =>
-      placeCorrectAnswerAt(q, pattern[index], index)
+      placeCorrectAnswerAt(q, pattern[index])
     );
   }
 
   if (Array.isArray(balanced.readingPassages)) {
-    balanced.readingPassages = balanced.readingPassages.map((passage: any, pIndex: number) => {
-      const pattern = balancedPattern((passage.questions || []).length, pIndex % 4);
+    balanced.readingPassages = balanced.readingPassages.map((passage: any) => {
+      const questions = passage.questions || [];
+      const pattern = makeBalancedUnpredictablePattern(questions.length);
       return {
         ...passage,
-        questions: (passage.questions || []).map((q: any, qIndex: number) =>
-          placeCorrectAnswerAt(q, pattern[qIndex], qIndex + pIndex)
+        questions: questions.map((q: any, index: number) =>
+          placeCorrectAnswerAt(q, pattern[index])
         ),
       };
     });
@@ -361,7 +418,9 @@ VOCABULARY SECTION
 - Do not use "too" to mean "also" before a main verb. Use "also" in that position, or place "too" naturally at the end of the clause.
 - Exactly one option must be semantically and grammatically possible. Avoid near-synonyms that could both fit.
 - The Traditional Chinese explanation must state the same meaning, direction, polarity, and comparison as the selected option. Never explain "more important" when the option says "less important," or vice versa.
-- wordTested must exactly match the text of the correct option, excluding the letter label.
+- wordTested must remain the base vocabulary entry from the supplied word list.
+- The correct option may use the grammatically required inflected or derived form of wordTested, such as sound → sounds, study → studied, create → creating, or careful → carefully.
+- answerText must contain the exact option text shown to the student. Do not force the dictionary form when grammar requires a different form.
 `;
 
       responseSchema.properties.vocabQuestions = {
@@ -374,6 +433,7 @@ VOCABULARY SECTION
             options: { type: Type.ARRAY, items: { type: Type.STRING } },
             correctAnswer: { type: Type.STRING },
             wordTested: { type: Type.STRING },
+            answerText: { type: Type.STRING },
             explanation: { type: Type.STRING },
           },
           required: ["id", "question", "options", "correctAnswer", "wordTested", "explanation"],
@@ -435,8 +495,9 @@ NON-NEGOTIABLE QUALITY RULES
 5. Grammar must be correct after the selected option is inserted into the sentence.
 6. The explanation must agree with the option text and with the source passage. Check negation, comparison, quantity, cause/effect, and time reference.
 7. Avoid awkward textbook English, dangling modifiers, unclear pronouns, and unsupported inferences.
-8. Do not intentionally cluster correct-answer letters; answer positions will be balanced after content validation.
-9. Return JSON only.`;
+8. Do not manipulate content to create a particular answer-letter pattern. The server will reposition the actual correct option after validation.
+9. For vocabulary items, keep wordTested as the source-list lemma and allow the correct option to use the grammatical form required by the sentence.
+10. Return JSON only.`;
 
     const writerUserPrompt = `Generate these sections: ${activeSections.join(", ")}.
 Target GSAT level: ${selectedLevel || "mixed"}.
@@ -506,6 +567,10 @@ Return JSON only.`;
         structuralValidationPassed: true,
         vocabAnswerDistribution: answerDistribution(finalData.vocabQuestions),
         readingAnswerDistributions: (finalData.readingPassages || []).map((p: any) => answerDistribution(p.questions)),
+        vocabAnswerSequence: (finalData.vocabQuestions || []).map((q: any) => q.correctAnswer).join(""),
+        readingAnswerSequences: (finalData.readingPassages || []).map((p: any) =>
+          (p.questions || []).map((q: any) => q.correctAnswer).join("")
+        ),
       },
     });
   } catch (error: any) {
