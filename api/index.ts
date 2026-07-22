@@ -269,6 +269,176 @@ function addStableIds(data: any): any {
   };
 }
 
+
+async function callJsonModel(
+  systemPrompt: string,
+  userPrompt: string,
+  responseSchema: any,
+  temperature: number,
+): Promise<any> {
+  let outputText = "";
+
+  if (process.env.OPENAI_API_KEY) {
+    const openai = getOpenAI();
+    const model = process.env.OPENAI_API_MODEL || "gpt-4o-mini";
+    const response = await openai.chat.completions.create({
+      model,
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: userPrompt },
+      ],
+      response_format: { type: "json_object" },
+      temperature,
+    });
+    outputText = response.choices[0]?.message?.content || "";
+  } else {
+    const ai = getGenAI();
+    const response = await ai.models.generateContent({
+      model: process.env.GEMINI_API_MODEL || "gemini-2.5-flash",
+      contents: userPrompt,
+      config: {
+        systemInstruction: systemPrompt,
+        responseMimeType: "application/json",
+        responseSchema,
+        temperature,
+      },
+    });
+    outputText = response.text || "";
+  }
+
+  if (!outputText.trim()) {
+    throw new Error("The AI model returned an empty response.");
+  }
+
+  try {
+    return JSON.parse(outputText);
+  } catch {
+    const cleaned = outputText
+      .replace(/^```(?:json)?\s*/i, "")
+      .replace(/\s*```$/i, "")
+      .trim();
+    try {
+      return JSON.parse(cleaned);
+    } catch {
+      throw new Error("The AI model returned invalid JSON.");
+    }
+  }
+}
+
+function normalizeGeneratedData(input: any): any {
+  if (!input || typeof input !== "object") {
+    throw new Error("Generated exam data is missing or invalid.");
+  }
+
+  const data: any = { ...input };
+
+  if (data.readingPassage && !data.readingPassages) {
+    data.readingPassages = Array.isArray(data.readingPassage)
+      ? data.readingPassage
+      : [data.readingPassage];
+  }
+  delete data.readingPassage;
+
+  if (Array.isArray(data.vocabQuestions)) {
+    data.vocabQuestions = data.vocabQuestions.map((q: any) => {
+      const options = normalizeOptionsArray(q.options || q.choices);
+      const correctAnswer = normalizeAnswerLetter(q.correctAnswer || q.answer);
+      return {
+        ...q,
+        options,
+        correctAnswer,
+        wordTested: stripOptionLabel(q.wordTested || optionTextAt(options, correctAnswer)),
+        explanation: String(q.explanation || "").trim(),
+      };
+    });
+  }
+
+  if (Array.isArray(data.readingPassages)) {
+    data.readingPassages = data.readingPassages.map((p: any) => ({
+      ...p,
+      level: String(p.level || "").trim(),
+      title: String(p.title || "").trim(),
+      passage: String(p.passage || "").trim(),
+      questions: Array.isArray(p.questions)
+        ? p.questions.map((q: any) => ({
+            ...q,
+            question: String(q.question || "").trim(),
+            options: normalizeOptionsArray(q.options || q.choices),
+            correctAnswer: normalizeAnswerLetter(q.correctAnswer || q.answer),
+            explanation: String(q.explanation || "").trim(),
+          }))
+        : [],
+    }));
+  }
+
+  return data;
+}
+
+function validateQuestion(question: any, context: string): void {
+  if (!question || typeof question !== "object") {
+    throw new Error(`${context}: question is missing.`);
+  }
+  if (!String(question.question || "").trim()) {
+    throw new Error(`${context}: question text is missing.`);
+  }
+
+  const options = normalizeOptionsArray(question.options || question.choices);
+  const texts = options.map(stripOptionLabel);
+  const folded = texts.map(text => text.toLocaleLowerCase());
+  if (new Set(folded).size !== 4) {
+    throw new Error(`${context}: options must be unique.`);
+  }
+
+  const answer = normalizeAnswerLetter(question.correctAnswer || question.answer);
+  const correctText = optionTextAt(options, answer);
+  if (!correctText) {
+    throw new Error(`${context}: correctAnswer does not point to a valid option.`);
+  }
+  if (!String(question.explanation || "").trim()) {
+    throw new Error(`${context}: explanation is missing.`);
+  }
+}
+
+function validateExamData(data: any, wantsVocab: boolean, wantsReading: boolean): void {
+  if (!data || typeof data !== "object") {
+    throw new Error("Generated exam data is invalid.");
+  }
+
+  if (wantsVocab) {
+    if (!Array.isArray(data.vocabQuestions) || data.vocabQuestions.length !== 10) {
+      throw new Error("Vocabulary section must contain exactly 10 questions.");
+    }
+    data.vocabQuestions.forEach((q: any, index: number) => {
+      validateQuestion(q, `Vocabulary question ${index + 1}`);
+      if (!String(q.question || "").includes("__________")) {
+        throw new Error(`Vocabulary question ${index + 1}: the blank is missing.`);
+      }
+      const options = normalizeOptionsArray(q.options || q.choices);
+      const answer = normalizeAnswerLetter(q.correctAnswer || q.answer);
+      const correctText = optionTextAt(options, answer);
+      if (stripOptionLabel(q.wordTested || "").toLocaleLowerCase() !== correctText.toLocaleLowerCase()) {
+        throw new Error(`Vocabulary question ${index + 1}: wordTested does not match the keyed option.`);
+      }
+    });
+  }
+
+  if (wantsReading) {
+    if (!Array.isArray(data.readingPassages) || data.readingPassages.length !== 1) {
+      throw new Error("Reading section must contain exactly one passage.");
+    }
+    const passage = data.readingPassages[0];
+    if (!String(passage.title || "").trim() || !String(passage.passage || "").trim()) {
+      throw new Error("Reading passage title or text is missing.");
+    }
+    if (!Array.isArray(passage.questions) || passage.questions.length !== 4) {
+      throw new Error("Reading passage must contain exactly four questions.");
+    }
+    passage.questions.forEach((q: any, index: number) =>
+      validateQuestion(q, `Reading question ${index + 1}`),
+    );
+  }
+}
+
 app.get("/api/health", async (req, res) => {
   const geminiKeyExists = !!process.env.GEMINI_API_KEY;
   const openaiKeyExists = !!process.env.OPENAI_API_KEY;
