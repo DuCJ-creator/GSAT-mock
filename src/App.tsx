@@ -187,7 +187,59 @@ export default function App() {
 
   // Normalize correctAnswer: "(A)" or "A" -> "A"
   const normalizeAnswer = (ans: any): string => {
-    return String(ans).replace(/[()]/g, "").trim();
+    return String(ans).replace(/[()]/g, "").trim().toUpperCase();
+  };
+
+  const validateQuestionPayload = (q: any, kind: "vocab" | "reading", label: string) => {
+    const options = normalizeOptions(q.options || q.choices);
+    const answer = normalizeAnswer(q.correctAnswer || q.answer);
+    const optionTexts = options.map(opt => opt.replace(/^\([A-D]\)\s*/, "").trim().toLowerCase());
+
+    if (!q.question || typeof q.question !== "string") {
+      throw new Error(`${label} 缺少題目文字。`);
+    }
+    if (kind === "vocab" && !/_{3,}/.test(q.question)) {
+      throw new Error(`${label} 缺少清楚的作答空格。`);
+    }
+    if (options.length !== 4 || options.some(opt => !opt.replace(/^\([A-D]\)\s*/, "").trim())) {
+      throw new Error(`${label} 必須有四個完整選項。`);
+    }
+    if (new Set(optionTexts).size !== 4) {
+      throw new Error(`${label} 含有重複選項，請重新生成。`);
+    }
+    if (!["A", "B", "C", "D"].includes(answer)) {
+      throw new Error(`${label} 的答案代號無效。`);
+    }
+    if (!q.explanation || typeof q.explanation !== "string") {
+      throw new Error(`${label} 缺少答案解析。`);
+    }
+  };
+
+  const validateBalancedDistribution = (distribution: Record<string, number> | undefined, label: string) => {
+    if (!distribution) throw new Error(`${label} 未通過答案分布檢查。`);
+    const counts = ["A", "B", "C", "D"].map(letter => Number(distribution[letter] || 0));
+    if (Math.max(...counts) - Math.min(...counts) > 1) {
+      throw new Error(`${label} 的正確答案過度集中，請重新生成。`);
+    }
+  };
+
+  const assertQualityAssurance = (payload: any) => {
+    const qa = payload?.qualityAssurance;
+    if (!qa?.editorialPassCompleted || !qa?.structuralValidationPassed) {
+      throw new Error("試題未完成文法、歧義與答案一致性審核，請重新生成。");
+    }
+    if (selectedExerciseTypes.vocab) {
+      validateBalancedDistribution(qa.vocabAnswerDistribution, "字彙題");
+    }
+    if (selectedExerciseTypes.reading) {
+      const readingDistributions = qa.readingAnswerDistributions;
+      if (!Array.isArray(readingDistributions) || readingDistributions.length === 0) {
+        throw new Error("閱讀題未通過答案分布檢查。");
+      }
+      readingDistributions.forEach((dist: Record<string, number>, idx: number) =>
+        validateBalancedDistribution(dist, `閱讀題第 ${idx + 1} 篇`)
+      );
+    }
   };
 
   const handleGenerateExam = async () => {
@@ -253,13 +305,20 @@ export default function App() {
         if (!resVocab.ok) throw new Error(await getErrorMsg(resVocab));
 
         const resVocabData = await resVocab.json();
+        assertQualityAssurance(resVocabData);
         console.log("RAW Q1 options:", JSON.stringify(resVocabData.data?.vocabQuestions?.[0]?.options));
 
         if (resVocabData.success && resVocabData.data && resVocabData.data.vocabQuestions) {
           const ts = Date.now();
+          if (resVocabData.data.vocabQuestions.length !== 10) {
+            throw new Error("字彙題數量不正確，系統已停止載入這份試卷。");
+          }
+          resVocabData.data.vocabQuestions.forEach((q: any, idx: number) =>
+            validateQuestionPayload(q, "vocab", `字彙題第 ${idx + 1} 題`)
+          );
           finalSuiteData.vocabQuestions = resVocabData.data.vocabQuestions.map((q: any, idx: number) => ({
             ...q,
-            id: `vocab-${idx}-${ts}`,
+            id: q.id || `vocab-${idx}-${ts}`,
             options: normalizeOptions(q.options || q.choices),
             correctAnswer: normalizeAnswer(q.correctAnswer || q.answer)
           }));
@@ -289,6 +348,7 @@ export default function App() {
           if (!resReading.ok) throw new Error(await getErrorMsg(resReading));
 
           const resReadingData = await resReading.json();
+          assertQualityAssurance(resReadingData);
           console.log("RAW READING RESPONSE:", JSON.stringify(resReadingData, null, 2));
 
           if (resReadingData.success && resReadingData.data) {
@@ -302,11 +362,17 @@ export default function App() {
 
             if (passages && passages.length > 0 && passages[0]) {
               const rts = Date.now();
+              if ((passages[0].questions || []).length !== 4) {
+                throw new Error(`${lvlLabel} 閱讀題必須恰好有 4 題。`);
+              }
+              (passages[0].questions || []).forEach((q: any, qIdx: number) =>
+                validateQuestionPayload(q, "reading", `${lvlLabel} 第 ${qIdx + 1} 題`)
+              );
               const passage = {
                 ...passages[0],
                 questions: (passages[0].questions || []).map((q: any, qIdx: number) => ({
                   ...q,
-                  id: `reading-${lvl}-${qIdx}-${rts}`,
+                  id: q.id || `reading-${lvl}-${qIdx}-${rts}`,
                   options: normalizeOptions(q.options || q.choices),
                   correctAnswer: normalizeAnswer(q.correctAnswer || q.answer)
                 }))
