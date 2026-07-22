@@ -213,6 +213,17 @@ export default function App() {
     if (!q.explanation || typeof q.explanation !== "string") {
       throw new Error(`${label} 缺少答案解析。`);
     }
+
+    const explanation = q.explanation.trim();
+    const ambiguitySignals = [
+      /(?:雖然|儘管).{0,35}(?:但|然而).{0,35}(?:更|較|不如|更能|更為)/,
+      /(?:也可以|亦可|尚可|可以成立|同樣合理|也合理|並非錯誤|不是完全錯誤)/,
+      /(?:最佳|最適合|較適合|更適合|更貼切|較貼切|更能強調|較能強調|不如.{0,20}(?:自然|貼切|適合))/,
+      /(?:could also fit|also acceptable|also possible|more appropriate|best answer|better fits)/i,
+    ];
+    if (ambiguitySignals.some(pattern => pattern.test(explanation))) {
+      throw new Error(`${label} 的解析承認其他選項也可能成立，屬於有歧義題目，系統已拒絕載入。`);
+    }
   };
 
   const assertQualityAssurance = (payload: any) => {
