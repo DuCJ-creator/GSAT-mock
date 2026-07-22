@@ -3,10 +3,10 @@ process.env.IS_SERVERLESS = "true";
 import express from "express";
 import path from "path";
 import { fileURLToPath } from "url";
+import { randomInt } from "crypto";
 import { GoogleGenAI, Type } from "@google/genai";
 import OpenAI from "openai";
 import dotenv from "dotenv";
-import { randomInt } from "crypto";
 
 dotenv.config();
 
@@ -17,268 +17,59 @@ const app = express();
 app.use(express.json({ limit: "20mb" }));
 const PORT = 3000;
 
-let aiInstance: GoogleGenAI | null = null;
-function getGenAI(): GoogleGenAI {
-  if (!aiInstance) {
+// -----------------------------------------------------------------------------
+// AI clients
+// -----------------------------------------------------------------------------
+
+let geminiClient: GoogleGenAI | null = null;
+let openAIClient: OpenAI | null = null;
+
+function getGemini(): GoogleGenAI {
+  if (!geminiClient) {
     const apiKey = process.env.GEMINI_API_KEY;
     if (!apiKey) throw new Error("GEMINI_API_KEY is not defined in the environment.");
-    aiInstance = new GoogleGenAI({ apiKey, httpOptions: { headers: { "User-Agent": "aistudio-build" } } });
+    geminiClient = new GoogleGenAI({
+      apiKey,
+      httpOptions: { headers: { "User-Agent": "gsat-mock-generator" } },
+    });
   }
-  return aiInstance;
+  return geminiClient;
 }
 
-let openaiInstance: OpenAI | null = null;
 function getOpenAI(): OpenAI {
-  if (!openaiInstance) {
+  if (!openAIClient) {
     const apiKey = process.env.OPENAI_API_KEY;
     if (!apiKey) throw new Error("OPENAI_API_KEY is not defined in the environment.");
-    openaiInstance = new OpenAI({ apiKey });
+    openAIClient = new OpenAI({ apiKey });
   }
-  return openaiInstance;
+  return openAIClient;
 }
 
-function verifyApiKeys() {
-  if (!process.env.GEMINI_API_KEY && !process.env.OPENAI_API_KEY) {
-    throw new Error("API Configuration Error: Please configure either GEMINI_API_KEY or OPENAI_API_KEY.");
+function verifyApiKeys(): void {
+  if (!process.env.OPENAI_API_KEY && !process.env.GEMINI_API_KEY) {
+    throw new Error("API Configuration Error: configure OPENAI_API_KEY or GEMINI_API_KEY.");
   }
 }
 
-// ------------------------------
-// Question quality helpers
-// ------------------------------
-const ANSWER_LETTERS = ["A", "B", "C", "D"] as const;
-type AnswerLetter = (typeof ANSWER_LETTERS)[number];
-
-function normalizeAnswerLetter(ans: any): AnswerLetter {
-  const letter = String(ans || "").replace(/[()]/g, "").trim().toUpperCase();
-  if (!ANSWER_LETTERS.includes(letter as AnswerLetter)) {
-    throw new Error(`Invalid correctAnswer: ${String(ans)}`);
-  }
-  return letter as AnswerLetter;
-}
-
-function stripOptionLabel(option: any): string {
-  return String(option ?? "")
-    .replace(/^\s*\(?[A-D]\)?[.、:\-]?\s*/i, "")
+function stripCodeFence(value: string): string {
+  return value
+    .trim()
+    .replace(/^```(?:json)?\s*/i, "")
+    .replace(/\s*```$/i, "")
     .trim();
 }
 
-function normalizeOptionsArray(opts: any): string[] {
-  let raw: any[] = [];
-
-  if (Array.isArray(opts)) {
-    raw = opts;
-  } else if (typeof opts === "string") {
-    const matches = opts.match(/\([A-D]\)\s*[\s\S]*?(?=\s*\([A-D]\)|$)/g);
-    raw = matches || [];
-  } else if (opts && typeof opts === "object") {
-    raw = Object.entries(opts)
-      .sort(([a], [b]) => a.localeCompare(b))
-      .map(([, value]) => value);
-  }
-
-  const texts = raw.map((item: any) => {
-    if (item && typeof item === "object" && !Array.isArray(item)) {
-      const firstValue = Object.values(item)[0];
-      return stripOptionLabel(firstValue);
-    }
-    return stripOptionLabel(item);
-  });
-
-  if (texts.length !== 4 || texts.some(text => !text)) {
-    throw new Error("Every question must contain exactly four non-empty options.");
-  }
-
-  return texts.map((text, index) => `(${ANSWER_LETTERS[index]}) ${text}`);
-}
-
-function getOptionTexts(options: any): string[] {
-  return normalizeOptionsArray(options).map(stripOptionLabel);
-}
-
-function shuffle<T>(items: T[]): T[] {
-  const result = [...items];
-  for (let i = result.length - 1; i > 0; i--) {
-    const j = randomInt(i + 1);
-    [result[i], result[j]] = [result[j], result[i]];
-  }
-  return result;
-}
-
-function hasThreeConsecutive(pattern: AnswerLetter[]): boolean {
-  return pattern.some((letter, index) =>
-    index >= 2 && letter === pattern[index - 1] && letter === pattern[index - 2]
-  );
-}
-
-function hasObviousCycle(pattern: AnswerLetter[]): boolean {
-  const text = pattern.join("");
-  const cycles = ["ABCD", "BCDA", "CDAB", "DABC", "DCBA", "CBAD", "BADC", "ADCB"];
-  return cycles.some(cycle => text.includes(cycle + cycle.slice(0, Math.max(0, text.length - 4))));
-}
-
-function makeBalancedUnpredictablePattern(count: number): AnswerLetter[] {
-  if (count <= 0) return [];
-
-  const base = Math.floor(count / ANSWER_LETTERS.length);
-  const remainder = count % ANSWER_LETTERS.length;
-  const extraLetters = shuffle([...ANSWER_LETTERS]).slice(0, remainder);
-  const pool: AnswerLetter[] = [];
-
-  for (const letter of ANSWER_LETTERS) {
-    const copies = base + (extraLetters.includes(letter) ? 1 : 0);
-    for (let i = 0; i < copies; i++) pool.push(letter);
-  }
-
-  // Four-question reading sets contain one of each answer, but never use the
-  // conspicuous ABCD or DCBA ordering. Larger sets are balanced within one.
-  for (let attempt = 0; attempt < 500; attempt++) {
-    const candidate = shuffle(pool);
-    const text = candidate.join("");
-    const tooObviousFour = count === 4 && (text === "ABCD" || text === "DCBA");
-    if (!tooObviousFour && !hasThreeConsecutive(candidate) && !hasObviousCycle(candidate)) {
-      return candidate;
-    }
-  }
-
-  // The fallback is still balanced. Rotate a shuffled pool to avoid a fixed
-  // deterministic sequence if the stricter search is exhausted.
-  const fallback = shuffle(pool);
-  const shift = fallback.length > 1 ? randomInt(fallback.length) : 0;
-  return [...fallback.slice(shift), ...fallback.slice(0, shift)];
-}
-
-/**
- * Repositions the actual keyed option. The answer letter is derived only after
- * the option text has been moved; it is never changed independently.
- */
-function placeCorrectAnswerAt(q: any, desired: AnswerLetter): any {
-  const options = getOptionTexts(q.options || q.choices);
-  const originalAnswer = normalizeAnswerLetter(q.correctAnswer || q.answer);
-  const originalIndex = ANSWER_LETTERS.indexOf(originalAnswer);
-  const correctText = options[originalIndex];
-
-  if (!correctText) {
-    throw new Error("The original answer key does not point to a valid option.");
-  }
-
-  const distractors = shuffle(options.filter((_, index) => index !== originalIndex));
-  const desiredIndex = ANSWER_LETTERS.indexOf(desired);
-  const reordered = [...distractors];
-  reordered.splice(desiredIndex, 0, correctText);
-
-  const keyedTextAfterMove = reordered[desiredIndex];
-  if (keyedTextAfterMove !== correctText) {
-    throw new Error("Answer-key integrity check failed while repositioning options.");
-  }
-
-  return {
-    ...q,
-    options: reordered.map((text, index) => `(${ANSWER_LETTERS[index]}) ${text}`),
-    correctAnswer: ANSWER_LETTERS[desiredIndex],
-    answerText: correctText,
-  };
-}
-
-function hasWordFamilyCluster(options: string[]): boolean {
-  const cleaned = options.map(option =>
-    stripOptionLabel(option).toLowerCase().replace(/[^a-z]/g, "")
-  );
-
-  // Reject obvious word-family exercises such as implement / implemented /
-  // implementing / implementation. A legitimate item such as sounds / hurt /
-  // begin / remain will not trigger this rule.
-  for (const word of cleaned) {
-    if (word.length < 5) continue;
-    const prefix = word.slice(0, 5);
-    const relatedCount = cleaned.filter(other => other.startsWith(prefix)).length;
-    if (relatedCount >= 3) return true;
-  }
-  return false;
-}
-
-function validateQuestion(q: any, kind: "vocab" | "reading"): string[] {
-  const errors: string[] = [];
-  const options = getOptionTexts(q.options || q.choices);
-  const answer = normalizeAnswerLetter(q.correctAnswer || q.answer);
-  const answerIndex = ANSWER_LETTERS.indexOf(answer);
-  const explanation = String(q.explanation || "").trim();
-
-  if (!String(q.question || "").trim()) errors.push("missing question text");
-  if (kind === "vocab" && !/_{3,}|\bblank\b/i.test(String(q.question || ""))) {
-    errors.push("vocabulary sentence has no visible blank");
-  }
-  if (new Set(options.map(o => o.toLocaleLowerCase())).size !== 4) {
-    errors.push("duplicate options");
-  }
-  if (kind === "vocab" && hasWordFamilyCluster(options)) {
-    errors.push("options form a word-family/conjugation cluster instead of testing distinct vocabulary");
-  }
-  if (!options[answerIndex]) errors.push("correctAnswer does not point to an option");
-  if (!explanation) errors.push("missing explanation");
-
-  // Explanations that say another option is acceptable but the keyed answer is
-  // merely stronger, better, or more suitable reveal an ambiguous item.
-  const ambiguitySignals = [
-    /(?:雖然|儘管).{0,35}(?:但|然而).{0,35}(?:更|較|不如|更能|更為)/,
-    /(?:也可以|亦可|尚可|可以成立|同樣合理|也合理|並非錯誤|不是完全錯誤)/,
-    /(?:最佳|最適合|較適合|更適合|更貼切|較貼切|更能強調|較能強調|不如.{0,20}(?:自然|貼切|適合))/,
-    /(?:could also fit|also acceptable|also possible|more appropriate|best answer|better fits)/i,
-  ];
-  if (ambiguitySignals.some(pattern => pattern.test(explanation))) {
-    errors.push("explanation admits or implies that another option could also fit");
-  }
-
-  return errors;
-}
-
-function validateExamData(data: any, wantsVocab: boolean, wantsReading: boolean): void {
-  const errors: string[] = [];
-
-  if (wantsVocab) {
-    if (!Array.isArray(data.vocabQuestions) || data.vocabQuestions.length !== 10) {
-      errors.push("vocabQuestions must contain exactly 10 questions");
-    } else {
-      data.vocabQuestions.forEach((q: any, i: number) => {
-        validateQuestion(q, "vocab").forEach(e => errors.push(`Vocabulary Q${i + 1}: ${e}`));
-      });
-    }
-  }
-
-  if (wantsReading) {
-    if (!Array.isArray(data.readingPassages) || data.readingPassages.length !== 1) {
-      errors.push("readingPassages must contain exactly one passage");
-    } else {
-      const passage = data.readingPassages[0];
-      if (!String(passage.passage || "").trim()) errors.push("reading passage is empty");
-      if (!Array.isArray(passage.questions) || passage.questions.length !== 4) {
-        errors.push("reading passage must contain exactly four questions");
-      } else {
-        passage.questions.forEach((q: any, i: number) => {
-          validateQuestion(q, "reading").forEach(e => errors.push(`Reading Q${i + 1}: ${e}`));
-        });
-      }
-    }
-  }
-
-  if (errors.length > 0) {
-    throw new Error(`Generated content failed validation: ${errors.join("; ")}`);
-  }
-}
-
-async function callJsonModel(
+async function callJsonModel<T>(
   systemPrompt: string,
   userPrompt: string,
   responseSchema?: any,
-  temperature = 0.25
-): Promise<any> {
-  let outputText = "";
+  temperature = 0.2,
+): Promise<T> {
+  let raw = "";
 
   if (process.env.OPENAI_API_KEY) {
-    const openai = getOpenAI();
-    const model = process.env.OPENAI_API_MODEL || "gpt-4o-mini";
-    const response = await openai.chat.completions.create({
-      model,
+    const response = await getOpenAI().chat.completions.create({
+      model: process.env.OPENAI_API_MODEL || "gpt-4o-mini",
       messages: [
         { role: "system", content: systemPrompt },
         { role: "user", content: userPrompt },
@@ -286,10 +77,9 @@ async function callJsonModel(
       response_format: { type: "json_object" },
       temperature,
     });
-    outputText = response.choices[0].message.content || "";
+    raw = response.choices[0]?.message?.content || "";
   } else {
-    const ai = getGenAI();
-    const response = await ai.models.generateContent({
+    const response = await getGemini().models.generateContent({
       model: process.env.GEMINI_API_MODEL || "gemini-2.5-flash",
       contents: userPrompt,
       config: {
@@ -299,96 +89,678 @@ async function callJsonModel(
         temperature,
       },
     });
-    outputText = response.text || "";
+    raw = response.text || "";
   }
 
-  if (!outputText) throw new Error("Empty response from AI model.");
-  return JSON.parse(outputText);
+  if (!raw.trim()) throw new Error("The AI model returned an empty response.");
+
+  try {
+    return JSON.parse(stripCodeFence(raw)) as T;
+  } catch (error: any) {
+    throw new Error(`The AI model returned invalid JSON: ${error?.message || String(error)}`);
+  }
 }
 
-function normalizeGeneratedData(data: any): any {
-  const normalized = { ...data };
+// -----------------------------------------------------------------------------
+// Shared types and normalization
+// -----------------------------------------------------------------------------
 
-  if (normalized.vocabQuestions) {
-    normalized.vocabQuestions = normalized.vocabQuestions.map((q: any) => {
-      const options = normalizeOptionsArray(q.options || q.choices);
-      const correctAnswer = normalizeAnswerLetter(q.correctAnswer || q.answer);
-      const correctIndex = ANSWER_LETTERS.indexOf(correctAnswer);
-      return {
-        ...q,
-        options,
-        correctAnswer,
-        wordTested: String(q.wordTested || "").trim(),
-        answerText: stripOptionLabel(options[correctIndex]),
-      };
-    });
-  }
+const LETTERS = ["A", "B", "C", "D"] as const;
+type AnswerLetter = (typeof LETTERS)[number];
 
-  if (normalized.readingPassage && !normalized.readingPassages) {
-    normalized.readingPassages = [normalized.readingPassage];
-  }
-  if (normalized.readingPassages && !Array.isArray(normalized.readingPassages)) {
-    normalized.readingPassages = [normalized.readingPassages];
-  }
-  if (normalized.readingPassages) {
-    normalized.readingPassages = normalized.readingPassages.map((p: any) => ({
-      ...p,
-      questions: (p.questions || []).map((q: any) => ({
-        ...q,
-        options: normalizeOptionsArray(q.options || q.choices),
-        correctAnswer: normalizeAnswerLetter(q.correctAnswer || q.answer),
-      })),
-    }));
-  }
+type VocabularyInput = {
+  word: string;
+  pos?: string;
+  meaning?: string;
+};
 
-  return normalized;
+type ExamQuestion = {
+  id?: string;
+  question: string;
+  options: string[];
+  correctAnswer: AnswerLetter;
+  explanation: string;
+  wordTested?: string;
+  answerText?: string;
+};
+
+type ReadingPassage = {
+  level: string;
+  title: string;
+  passage: string;
+  questions: ExamQuestion[];
+};
+
+type ExamData = {
+  vocabQuestions?: ExamQuestion[];
+  readingPassages?: ReadingPassage[];
+};
+
+function normalizeAnswer(value: unknown): AnswerLetter {
+  const letter = String(value ?? "")
+    .replace(/[()]/g, "")
+    .trim()
+    .toUpperCase();
+  if (!LETTERS.includes(letter as AnswerLetter)) {
+    throw new Error(`Invalid answer letter: ${String(value)}`);
+  }
+  return letter as AnswerLetter;
 }
 
-function balanceAnswerPositions(data: any): any {
-  const balanced = { ...data };
+function stripOptionLabel(value: unknown): string {
+  return String(value ?? "")
+    .replace(/^\s*\(?[A-D]\)?[.、:：\-]?\s*/i, "")
+    .trim();
+}
 
-  if (Array.isArray(balanced.vocabQuestions)) {
-    const pattern = makeBalancedUnpredictablePattern(balanced.vocabQuestions.length);
-    balanced.vocabQuestions = balanced.vocabQuestions.map((q: any, index: number) =>
-      placeCorrectAnswerAt(q, pattern[index])
-    );
+function normalizeOptions(value: unknown): string[] {
+  let raw: unknown[] = [];
+
+  if (Array.isArray(value)) {
+    raw = value;
+  } else if (typeof value === "string") {
+    raw = value.match(/\([A-D]\)\s*[\s\S]*?(?=\s*\([A-D]\)|$)/g) || [];
+  } else if (value && typeof value === "object") {
+    raw = Object.entries(value as Record<string, unknown>)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([, item]) => item);
   }
 
-  if (Array.isArray(balanced.readingPassages)) {
-    balanced.readingPassages = balanced.readingPassages.map((passage: any) => {
-      const questions = passage.questions || [];
-      const pattern = makeBalancedUnpredictablePattern(questions.length);
-      return {
-        ...passage,
-        questions: questions.map((q: any, index: number) =>
-          placeCorrectAnswerAt(q, pattern[index])
+  const texts = raw.map((item) => {
+    if (item && typeof item === "object" && !Array.isArray(item)) {
+      return stripOptionLabel(Object.values(item as Record<string, unknown>)[0]);
+    }
+    return stripOptionLabel(item);
+  });
+
+  if (texts.length !== 4 || texts.some((text) => !text)) {
+    throw new Error("Each question must contain exactly four non-empty options.");
+  }
+
+  return texts.map((text, index) => `(${LETTERS[index]}) ${text}`);
+}
+
+function optionTexts(options: unknown): string[] {
+  return normalizeOptions(options).map(stripOptionLabel);
+}
+
+function normalizeQuestion(raw: any, kind: "vocab" | "reading"): ExamQuestion {
+  const options = normalizeOptions(raw?.options ?? raw?.choices);
+  const correctAnswer = normalizeAnswer(raw?.correctAnswer ?? raw?.answer);
+  const correctIndex = LETTERS.indexOf(correctAnswer);
+  const exactAnswerText = stripOptionLabel(options[correctIndex]);
+
+  return {
+    question: String(raw?.question ?? "").trim(),
+    options,
+    correctAnswer,
+    explanation: String(raw?.explanation ?? "").trim(),
+    ...(kind === "vocab"
+      ? {
+          wordTested: String(raw?.wordTested ?? "").trim(),
+          answerText: exactAnswerText,
+        }
+      : {}),
+  };
+}
+
+function normalizePassage(raw: any): ReadingPassage {
+  return {
+    level: String(raw?.level ?? "").trim(),
+    title: String(raw?.title ?? "").trim(),
+    passage: String(raw?.passage ?? "").trim(),
+    questions: Array.isArray(raw?.questions)
+      ? raw.questions.map((q: any) => normalizeQuestion(q, "reading"))
+      : [],
+  };
+}
+
+// -----------------------------------------------------------------------------
+// Deterministic validation
+// -----------------------------------------------------------------------------
+
+function normalizeLexicalToken(text: string): string {
+  return text.toLowerCase().replace(/[^a-z]/g, "");
+}
+
+function hasObviousWordFamilyCluster(options: string[]): boolean {
+  const tokens = options.map((item) => normalizeLexicalToken(stripOptionLabel(item)));
+  for (const token of tokens) {
+    if (token.length < 5) continue;
+    const stem = token.slice(0, 5);
+    if (tokens.filter((other) => other.startsWith(stem)).length >= 3) return true;
+  }
+  return false;
+}
+
+function hasAmbiguityAdmission(explanation: string): boolean {
+  const patterns = [
+    /(?:也可以|亦可|也合理|同樣合理|可以成立|尚可|並非錯誤|不是完全錯誤)/,
+    /(?:最佳答案|較適合|更適合|較貼切|更貼切|更能強調|較能強調)/,
+    /(?:雖然|儘管).{0,45}(?:但|然而).{0,45}(?:更|較|不如)/,
+    /(?:could also fit|also acceptable|also possible|best answer|more appropriate|better fit)/i,
+  ];
+  return patterns.some((pattern) => pattern.test(explanation));
+}
+
+function validateQuestion(question: ExamQuestion, kind: "vocab" | "reading"): string[] {
+  const errors: string[] = [];
+  const texts = question.options.map(stripOptionLabel);
+  const answerIndex = LETTERS.indexOf(question.correctAnswer);
+
+  if (!question.question) errors.push("missing question text");
+  if (kind === "vocab" && !/_{3,}/.test(question.question)) {
+    errors.push("the vocabulary sentence has no visible blank");
+  }
+  if (question.options.length !== 4 || texts.some((item) => !item)) {
+    errors.push("the question does not have four complete options");
+  }
+  if (new Set(texts.map((item) => item.toLowerCase())).size !== 4) {
+    errors.push("duplicate options");
+  }
+  if (!texts[answerIndex]) errors.push("the answer letter does not identify an option");
+  if (!question.explanation) errors.push("missing answer explanation");
+  if (hasAmbiguityAdmission(question.explanation)) {
+    errors.push("the explanation admits that another option could fit");
+  }
+
+  if (kind === "vocab") {
+    if (!question.wordTested) errors.push("missing wordTested");
+    if (!question.answerText) errors.push("missing answerText");
+    if (question.answerText && question.answerText !== texts[answerIndex]) {
+      errors.push("answerText does not match the keyed option");
+    }
+    if (hasObviousWordFamilyCluster(question.options)) {
+      errors.push("the options form a word-family exercise instead of a vocabulary-choice item");
+    }
+  }
+
+  return errors;
+}
+
+function countWords(text: string): number {
+  return (text.match(/\b[\w'-]+\b/g) || []).length;
+}
+
+function validatePassage(passage: ReadingPassage): string[] {
+  const errors: string[] = [];
+  if (!passage.title) errors.push("missing passage title");
+  if (!passage.passage) errors.push("missing passage text");
+  const words = countWords(passage.passage);
+  if (words < 180 || words > 280) errors.push(`passage length is ${words} words; expected about 200-250`);
+  if (passage.questions.length !== 4) errors.push("the passage must have exactly four questions");
+  passage.questions.forEach((q, index) => {
+    validateQuestion(q, "reading").forEach((error) => errors.push(`Q${index + 1}: ${error}`));
+  });
+  return errors;
+}
+
+// -----------------------------------------------------------------------------
+// Balanced but unpredictable answer placement
+// -----------------------------------------------------------------------------
+
+function shuffle<T>(values: readonly T[]): T[] {
+  const result = [...values];
+  for (let i = result.length - 1; i > 0; i--) {
+    const j = randomInt(i + 1);
+    [result[i], result[j]] = [result[j], result[i]];
+  }
+  return result;
+}
+
+function hasThreeIdenticalInARow(pattern: AnswerLetter[]): boolean {
+  return pattern.some(
+    (letter, index) => index >= 2 && letter === pattern[index - 1] && letter === pattern[index - 2],
+  );
+}
+
+function hasMechanicalSequence(pattern: AnswerLetter[]): boolean {
+  const text = pattern.join("");
+  const obvious = ["ABCDABCD", "DCBADCBA", "ABCD", "DCBA"];
+  return obvious.some((sequence) => text.includes(sequence));
+}
+
+function makeAnswerPattern(count: number): AnswerLetter[] {
+  if (count <= 0) return [];
+
+  const base = Math.floor(count / 4);
+  const remainder = count % 4;
+  const extras = new Set(shuffle(LETTERS).slice(0, remainder));
+  const pool: AnswerLetter[] = [];
+
+  for (const letter of LETTERS) {
+    const quantity = base + (extras.has(letter) ? 1 : 0);
+    for (let i = 0; i < quantity; i++) pool.push(letter);
+  }
+
+  for (let attempt = 0; attempt < 1000; attempt++) {
+    const candidate = shuffle(pool);
+    if (!hasThreeIdenticalInARow(candidate) && !hasMechanicalSequence(candidate)) {
+      return candidate;
+    }
+  }
+
+  return shuffle(pool);
+}
+
+function moveActualCorrectOption(question: ExamQuestion, destination: AnswerLetter): ExamQuestion {
+  const texts = question.options.map(stripOptionLabel);
+  const originalIndex = LETTERS.indexOf(question.correctAnswer);
+  const correctText = texts[originalIndex];
+  if (!correctText) throw new Error("The original answer key points to no option.");
+
+  const destinationIndex = LETTERS.indexOf(destination);
+  const distractors = shuffle(texts.filter((_, index) => index !== originalIndex));
+  const reordered = [...distractors];
+  reordered.splice(destinationIndex, 0, correctText);
+
+  if (reordered[destinationIndex] !== correctText) {
+    throw new Error("Correct-option integrity check failed during answer placement.");
+  }
+
+  return {
+    ...question,
+    options: reordered.map((text, index) => `(${LETTERS[index]}) ${text}`),
+    correctAnswer: destination,
+    ...(question.wordTested ? { answerText: correctText } : {}),
+  };
+}
+
+function balanceQuestions(questions: ExamQuestion[]): ExamQuestion[] {
+  const pattern = makeAnswerPattern(questions.length);
+  return questions.map((question, index) => moveActualCorrectOption(question, pattern[index]));
+}
+
+// -----------------------------------------------------------------------------
+// Model schemas
+// -----------------------------------------------------------------------------
+
+const questionProperties = {
+  question: { type: Type.STRING },
+  options: { type: Type.ARRAY, items: { type: Type.STRING } },
+  correctAnswer: { type: Type.STRING },
+  explanation: { type: Type.STRING },
+};
+
+const vocabQuestionSchema = {
+  type: Type.OBJECT,
+  properties: {
+    ...questionProperties,
+    wordTested: { type: Type.STRING },
+    answerText: { type: Type.STRING },
+  },
+  required: ["question", "options", "correctAnswer", "wordTested", "answerText", "explanation"],
+};
+
+const readingQuestionSchema = {
+  type: Type.OBJECT,
+  properties: questionProperties,
+  required: ["question", "options", "correctAnswer", "explanation"],
+};
+
+const vocabBatchSchema = {
+  type: Type.OBJECT,
+  properties: {
+    vocabQuestions: { type: Type.ARRAY, items: vocabQuestionSchema },
+  },
+  required: ["vocabQuestions"],
+};
+
+const readingSchema = {
+  type: Type.OBJECT,
+  properties: {
+    readingPassages: {
+      type: Type.ARRAY,
+      items: {
+        type: Type.OBJECT,
+        properties: {
+          level: { type: Type.STRING },
+          title: { type: Type.STRING },
+          passage: { type: Type.STRING },
+          questions: { type: Type.ARRAY, items: readingQuestionSchema },
+        },
+        required: ["level", "title", "passage", "questions"],
+      },
+    },
+  },
+  required: ["readingPassages"],
+};
+
+// -----------------------------------------------------------------------------
+// Prompts
+// -----------------------------------------------------------------------------
+
+const VOCAB_WRITER_SYSTEM = `You are a professional Taiwan GSAT English vocabulary item writer.
+Return JSON only.
+
+NON-NEGOTIABLE ITEM RULES
+1. The task tests vocabulary meaning and usage, not a four-form word-family exercise.
+2. Every question uses four DIFFERENT lexical items. Never give implement / implemented / implementing / implementation as one option set.
+3. The correct target word may be inflected only as ordinary grammar requires: sound -> sounds, study -> studied, child -> children, careful -> carefully.
+4. wordTested remains the source-list dictionary entry; answerText is the exact form shown in the option.
+5. The sentence must have one and only one defensible answer. It is not a "best answer" question.
+6. Add a semantic lock: definition, cause, consequence, contrast, purpose, factual detail, or fixed collocation that excludes all distractors.
+7. Avoid generic frames where many adjectives or verbs could fit, such as "The athlete's ___ performance impressed everyone."
+8. Distractors may look plausible at first glance but must become clearly wrong in the exact sentence because of meaning, grammar, collocation, logic, or register.
+9. Silently insert all four options into the sentence. If a competent English teacher could defend a distractor, rewrite the sentence or replace it.
+10. Use natural standard English with correct agreement, tense, number, articles, prepositions, and punctuation.
+11. Return options in A-B-C-D order, each prefixed (A), (B), (C), (D). correctAnswer is one bare letter.
+12. The Traditional Chinese explanation must identify why the keyed answer is required and why EACH distractor is impossible in this exact context.
+13. Never say another option is possible but less suitable. Never use language such as 最佳、較貼切、更適合、雖然也可以.
+14. Do not design answer-letter patterns. The server will move the actual correct option safely after review.`;
+
+const VOCAB_REVIEWER_SYSTEM = `You are the final senior editor of a Taiwan GSAT vocabulary item bank.
+You receive one draft item. Repair it completely and return one corrected JSON object only.
+
+AUDIT PROCEDURE
+- Insert each of the four options into the sentence.
+- Confirm grammar, natural usage, collocation, semantic direction, and logical fit.
+- Confirm the options are four distinct vocabulary items, not forms or derivatives of one base word.
+- Confirm exactly one answer is defensible. If another option could fit, rewrite the stem or replace that distractor.
+- Preserve wordTested as the intended source-list lemma, but inflect the displayed answer when grammar requires it.
+- Set answerText to the exact keyed option text.
+- Independently solve the repaired item and set correctAnswer accordingly.
+- Write a complete Traditional Chinese explanation: why the answer is required and why A, B, C, and D alternatives fail in the exact context.
+- Never admit that another choice is acceptable, possible, or merely less natural.
+- Return JSON only.`;
+
+const READING_WRITER_SYSTEM = `You are a professional Taiwan GSAT reading-comprehension item writer.
+Return JSON only.
+
+RULES
+1. Write one natural English passage of about 200-250 words at the requested level.
+2. Write exactly four questions covering main idea, detail, inference/tone, and vocabulary in context.
+3. Each question must have exactly one defensible answer supported by explicit text or a necessary inference.
+4. Distractors must be clearly false, unsupported, too broad, too narrow, opposite, or based on a misreading.
+5. Return options in A-B-C-D order with labels; correctAnswer is one bare letter.
+6. Traditional Chinese explanations must cite or accurately paraphrase the relevant passage evidence and explain why the distractors fail.
+7. Check polarity, comparison, cause/effect, chronology, quantity, and pronoun reference.
+8. Do not design answer-letter patterns; the server will safely reposition the actual correct options.`;
+
+const READING_REVIEWER_SYSTEM = `You are the final senior editor of a Taiwan GSAT reading-comprehension item bank.
+Repair the complete passage and its four questions, then return the complete corrected JSON only.
+
+For each question:
+- Independently answer it from the passage.
+- Verify exactly one option is supported.
+- Replace any distractor that could also be defended.
+- Correct mismatches between the option and its Traditional Chinese explanation.
+- Preserve the exact polarity, comparison, chronology, quantity, and causal direction of the passage.
+- Ensure each explanation identifies the relevant passage evidence and rejects the distractors.
+Keep exactly one passage and exactly four questions. Return JSON only.`;
+
+function formatVocabularyList(vocabList: VocabularyInput[]): string {
+  if (!vocabList.length) return "Use standard GSAT Level 3-6 vocabulary.";
+  return vocabList
+    .map(
+      (item, index) =>
+        `${index + 1}. ${item.word}${item.pos ? ` (${item.pos})` : ""}${item.meaning ? ` — ${item.meaning}` : ""}`,
+    )
+    .join("\n");
+}
+
+// -----------------------------------------------------------------------------
+// Vocabulary generation and item-level repair
+// -----------------------------------------------------------------------------
+
+async function generateVocabularyDraft(
+  vocabList: VocabularyInput[],
+  selectedLevel: number | string,
+): Promise<ExamQuestion[]> {
+  const userPrompt = `Create exactly 10 GSAT vocabulary questions for Level ${selectedLevel || "mixed"}.
+Use the supplied list as the tested vocabulary range. Across the set, use different target words where possible.
+Distractors should preferably come from the same supplied range, but each option set must contain four distinct lexical items.
+
+VOCABULARY LIST
+${formatVocabularyList(vocabList)}
+
+Return {"vocabQuestions":[...]} with exactly 10 items.`;
+
+  const raw = await callJsonModel<any>(
+    VOCAB_WRITER_SYSTEM,
+    userPrompt,
+    vocabBatchSchema,
+    0.35,
+  );
+
+  const items = Array.isArray(raw?.vocabQuestions) ? raw.vocabQuestions : [];
+  return items.slice(0, 10).map((item: any) => normalizeQuestion(item, "vocab"));
+}
+
+async function generateOneVocabularyQuestion(
+  vocabList: VocabularyInput[],
+  selectedLevel: number | string,
+  avoidQuestions: string[],
+): Promise<ExamQuestion> {
+  const prompt = `Create ONE new Level ${selectedLevel || "mixed"} GSAT vocabulary question.
+Do not duplicate these existing stems:
+${avoidQuestions.map((q) => `- ${q}`).join("\n") || "(none)"}
+
+VOCABULARY LIST
+${formatVocabularyList(vocabList)}
+
+Return one question object, not an array.`;
+  const raw = await callJsonModel<any>(VOCAB_WRITER_SYSTEM, prompt, vocabQuestionSchema, 0.4);
+  return normalizeQuestion(raw, "vocab");
+}
+
+async function repairVocabularyQuestion(
+  question: ExamQuestion,
+  errors: string[],
+  vocabList: VocabularyInput[],
+  selectedLevel: number | string,
+): Promise<ExamQuestion> {
+  const prompt = `Repair this Level ${selectedLevel || "mixed"} item.
+Detected deterministic problems: ${errors.join("; ") || "none; perform full semantic audit anyway"}.
+
+SOURCE VOCABULARY RANGE
+${formatVocabularyList(vocabList)}
+
+DRAFT ITEM
+${JSON.stringify(question)}
+
+Return one fully repaired question object.`;
+
+  const raw = await callJsonModel<any>(
+    VOCAB_REVIEWER_SYSTEM,
+    prompt,
+    vocabQuestionSchema,
+    0.08,
+  );
+  return normalizeQuestion(raw, "vocab");
+}
+
+async function buildVocabularySection(
+  vocabList: VocabularyInput[],
+  selectedLevel: number | string,
+): Promise<ExamQuestion[]> {
+  let questions: ExamQuestion[] = [];
+  let lastError: unknown = null;
+
+  for (let batchAttempt = 0; batchAttempt < 3 && questions.length < 10; batchAttempt++) {
+    try {
+      questions = await generateVocabularyDraft(vocabList, selectedLevel);
+    } catch (error) {
+      lastError = error;
+      console.warn(`Vocabulary batch attempt ${batchAttempt + 1} failed:`, error);
+    }
+  }
+
+  while (questions.length < 10) {
+    try {
+      questions.push(
+        await generateOneVocabularyQuestion(
+          vocabList,
+          selectedLevel,
+          questions.map((q) => q.question),
         ),
-      };
-    });
+      );
+    } catch (error) {
+      lastError = error;
+      if (questions.length === 0) throw error;
+      break;
+    }
   }
 
+  if (questions.length !== 10) {
+    throw lastError || new Error(`Unable to generate 10 vocabulary questions; received ${questions.length}.`);
+  }
+
+  const reviewed: ExamQuestion[] = [];
+
+  for (let index = 0; index < questions.length; index++) {
+    let current = questions[index];
+    let errors = validateQuestion(current, "vocab");
+
+    // Every item receives at least one independent semantic review, even when
+    // deterministic checks find no issue. This catches ambiguity such as
+    // intense/remarkable performance that code alone cannot reliably detect.
+    for (let repairAttempt = 0; repairAttempt < 3; repairAttempt++) {
+      try {
+        current = await repairVocabularyQuestion(
+          current,
+          errors,
+          vocabList,
+          selectedLevel,
+        );
+        errors = validateQuestion(current, "vocab");
+        if (errors.length === 0) break;
+      } catch (error) {
+        lastError = error;
+        console.warn(`Vocabulary Q${index + 1} repair ${repairAttempt + 1} failed:`, error);
+      }
+    }
+
+    if (errors.length > 0) {
+      // Replace only this item instead of failing the entire paper.
+      let replacement: ExamQuestion | null = null;
+      for (let replacementAttempt = 0; replacementAttempt < 3; replacementAttempt++) {
+        try {
+          const fresh = await generateOneVocabularyQuestion(
+            vocabList,
+            selectedLevel,
+            reviewed.map((q) => q.question),
+          );
+          const repaired = await repairVocabularyQuestion(
+            fresh,
+            validateQuestion(fresh, "vocab"),
+            vocabList,
+            selectedLevel,
+          );
+          if (validateQuestion(repaired, "vocab").length === 0) {
+            replacement = repaired;
+            break;
+          }
+        } catch (error) {
+          lastError = error;
+        }
+      }
+      if (!replacement) {
+        throw lastError || new Error(`Vocabulary question ${index + 1} could not pass quality review.`);
+      }
+      current = replacement;
+    }
+
+    reviewed.push(current);
+  }
+
+  const balanced = balanceQuestions(reviewed);
+  balanced.forEach((question, index) => {
+    const errors = validateQuestion(question, "vocab");
+    if (errors.length) {
+      throw new Error(`Vocabulary Q${index + 1} failed final QA: ${errors.join("; ")}`);
+    }
+  });
   return balanced;
 }
 
-function addStableIds(data: any): any {
-  const ts = Date.now();
+// -----------------------------------------------------------------------------
+// Reading generation and repair
+// -----------------------------------------------------------------------------
+
+async function generateReadingDraft(level: string, selectedLevel: number | string): Promise<ReadingPassage> {
+  const prompt = `Create one reading passage for reading band "${level}" and GSAT Level ${selectedLevel || "mixed"}.
+Return {"readingPassages":[one passage]} with exactly four questions.`;
+  const raw = await callJsonModel<any>(READING_WRITER_SYSTEM, prompt, readingSchema, 0.35);
+  const passageRaw = Array.isArray(raw?.readingPassages)
+    ? raw.readingPassages[0]
+    : raw?.readingPassage ?? raw;
+  return normalizePassage(passageRaw);
+}
+
+async function repairReadingPassage(
+  passage: ReadingPassage,
+  errors: string[],
+  level: string,
+): Promise<ReadingPassage> {
+  const prompt = `Repair this complete "${level}" reading set.
+Detected deterministic problems: ${errors.join("; ") || "none; perform full semantic audit anyway"}.
+
+DRAFT
+${JSON.stringify({ readingPassages: [passage] })}
+
+Return {"readingPassages":[the complete repaired passage]} only.`;
+  const raw = await callJsonModel<any>(READING_REVIEWER_SYSTEM, prompt, readingSchema, 0.08);
+  const passageRaw = Array.isArray(raw?.readingPassages)
+    ? raw.readingPassages[0]
+    : raw?.readingPassage ?? raw;
+  return normalizePassage(passageRaw);
+}
+
+async function buildReadingSection(
+  level: string,
+  selectedLevel: number | string,
+): Promise<ReadingPassage> {
+  let lastError: unknown = null;
+
+  for (let generationAttempt = 0; generationAttempt < 3; generationAttempt++) {
+    try {
+      let passage = await generateReadingDraft(level, selectedLevel);
+      let errors = validatePassage(passage);
+
+      // Always run at least one independent passage-level editorial review.
+      for (let repairAttempt = 0; repairAttempt < 3; repairAttempt++) {
+        passage = await repairReadingPassage(passage, errors, level);
+        errors = validatePassage(passage);
+        if (errors.length === 0) {
+          passage.questions = balanceQuestions(passage.questions);
+          const finalErrors = validatePassage(passage);
+          if (finalErrors.length === 0) return passage;
+          errors = finalErrors;
+        }
+      }
+      lastError = new Error(errors.join("; "));
+    } catch (error) {
+      lastError = error;
+      console.warn(`Reading generation attempt ${generationAttempt + 1} failed:`, error);
+    }
+  }
+
+  throw lastError || new Error(`Unable to generate a validated ${level} reading passage.`);
+}
+
+// -----------------------------------------------------------------------------
+// IDs and diagnostics
+// -----------------------------------------------------------------------------
+
+function addIds(data: ExamData): ExamData {
+  const stamp = Date.now();
   return {
-    ...data,
-    ...(Array.isArray(data.vocabQuestions)
+    ...(data.vocabQuestions
       ? {
-          vocabQuestions: data.vocabQuestions.map((q: any, index: number) => ({
-            ...q,
-            id: `vocab-${index}-${ts}`,
+          vocabQuestions: data.vocabQuestions.map((question, index) => ({
+            ...question,
+            id: `vocab-${index}-${stamp}`,
           })),
         }
       : {}),
-    ...(Array.isArray(data.readingPassages)
+    ...(data.readingPassages
       ? {
-          readingPassages: data.readingPassages.map((p: any, pIndex: number) => ({
-            ...p,
-            questions: (p.questions || []).map((q: any, qIndex: number) => ({
-              ...q,
-              id: `reading-${pIndex}-${qIndex}-${ts}`,
+          readingPassages: data.readingPassages.map((passage, passageIndex) => ({
+            ...passage,
+            questions: passage.questions.map((question, questionIndex) => ({
+              ...question,
+              id: `reading-${passageIndex}-${questionIndex}-${stamp}`,
             })),
           })),
         }
@@ -396,326 +768,178 @@ function addStableIds(data: any): any {
   };
 }
 
-app.get("/api/health", async (req, res) => {
-  const geminiKeyExists = !!process.env.GEMINI_API_KEY;
-  const openaiKeyExists = !!process.env.OPENAI_API_KEY;
-  let geminiTest = "Not tested";
-  let geminiError = null;
-  if (geminiKeyExists) {
-    try {
-      const ai = getGenAI();
-      const response = await ai.models.generateContent({ model: "gemini-2.5-flash", contents: "Respond with 'ok'" });
-      geminiTest = response.text || "Empty response";
-    } catch (e: any) {
-      geminiError = e.message || String(e);
-    }
-  }
+function distribution(questions: ExamQuestion[] = []): Record<AnswerLetter, number> {
+  return questions.reduce(
+    (counts, question) => {
+      counts[question.correctAnswer] += 1;
+      return counts;
+    },
+    { A: 0, B: 0, C: 0, D: 0 } as Record<AnswerLetter, number>,
+  );
+}
+
+// -----------------------------------------------------------------------------
+// Routes
+// -----------------------------------------------------------------------------
+
+app.get("/api/health", async (_req, res) => {
   res.json({
     status: "ok",
-    message: "GSAT Buffet API is healthy.",
-    env: { geminiKeyExists, openaiKeyExists, NODE_ENV: process.env.NODE_ENV },
-    geminiTest,
-    geminiError,
+    message: "GSAT Mock API is healthy.",
+    env: {
+      openaiKeyExists: !!process.env.OPENAI_API_KEY,
+      geminiKeyExists: !!process.env.GEMINI_API_KEY,
+      NODE_ENV: process.env.NODE_ENV,
+    },
   });
 });
 
 app.post("/api/generate", async (req, res) => {
   try {
-    const { vocabList, selectedExerciseTypes, selectedReadingLevels, selectedLevel } = req.body;
     verifyApiKeys();
 
+    const {
+      vocabList = [],
+      selectedExerciseTypes = {},
+      selectedReadingLevels = [],
+      selectedLevel = "mixed",
+    } = req.body || {};
+
     const wantsVocab = !!selectedExerciseTypes?.vocab;
-    const wantsReading = !!selectedExerciseTypes?.reading && Array.isArray(selectedReadingLevels) && selectedReadingLevels.length > 0;
+    const wantsReading =
+      !!selectedExerciseTypes?.reading &&
+      Array.isArray(selectedReadingLevels) &&
+      selectedReadingLevels.length > 0;
+
     if (!wantsVocab && !wantsReading) {
-      return res.status(400).json({ success: false, error: "Please select at least one exercise type." });
+      return res.status(400).json({
+        success: false,
+        error: "Please select at least one exercise type.",
+      });
     }
 
-    const vocabString = Array.isArray(vocabList) && vocabList.length > 0
+    const cleanVocabList: VocabularyInput[] = Array.isArray(vocabList)
       ? vocabList
-          .map((vw: any) => `Word: "${vw.word}" (POS: ${vw.pos || "unspecified"}, meaning: ${vw.meaning || "not supplied"})`)
-          .join("\n")
-      : "Use standard GSAT Level 3-6 academic vocabulary.";
+          .map((item: any) => ({
+            word: String(item?.word ?? "").trim(),
+            pos: item?.pos ? String(item.pos).trim() : undefined,
+            meaning: item?.meaning ? String(item.meaning).trim() : undefined,
+          }))
+          .filter((item: VocabularyInput) => item.word)
+      : [];
 
-    const responseSchema: any = { type: Type.OBJECT, properties: {}, required: [] };
-    const activeSections: string[] = [];
-    let sectionInstructions = "";
+    const data: ExamData = {};
 
     if (wantsVocab) {
-      activeSections.push("vocabQuestions");
-      sectionInstructions += `
-VOCABULARY SECTION
-- Create exactly 10 single-sentence vocabulary multiple-choice questions.
-- Each question must contain one visible blank written as __________.
-- The item must test VOCABULARY CHOICE, not word-family or conjugation recognition.
-- The four options must be four different vocabulary items (different lemmas), preferably drawn from the supplied vocabulary range. Do NOT present four forms or derivatives of the same word, such as implement / implemented / implementing / implementation.
-- Distractors must be semantically plausible but lexically different words. They should match the grammatical slot required by the sentence, but must not be alternative forms of wordTested.
-- The correct option may inflect ONLY when ordinary sentence grammar requires it. Examples: sound -> sounds after a singular subject; study -> studied for past tense; child -> children for plural. This grammatical adjustment must not become the focus of the item.
-- Subject-verb agreement, tense, number, articles, prepositions, collocations, and punctuation must all be correct.
-- Do not leave the intended answer in its dictionary form when the sentence requires inflection. Example: write "sounds" rather than "sound" after a singular subject in the simple present.
-- Do not use "too" to mean "also" before a main verb. Use "also" in that position, or place "too" naturally at the end of the clause.
-- Exactly one option must be semantically, grammatically, collocationally, and logically possible. This is an ONLY-answer item, not a best-answer item.
-- Build a semantic lock into the sentence through a definition, consequence, contrast, cause, purpose, or other context clue that excludes all three distractors.
-- Avoid broad evaluative frames such as "an ___ performance impressed everyone" when several positive adjectives could reasonably fit.
-- Never use near-synonyms or contextually defensible alternatives as distractors. If a competent teacher could defend another option, rewrite the sentence or replace that distractor.
-- The Traditional Chinese explanation must state the same meaning, direction, polarity, and comparison as the selected option. Never explain "more important" when the option says "less important," or vice versa.
-- The explanation must explain why EACH distractor is impossible in this exact sentence because of meaning, collocation, grammar, logic, or register. It must never say another option is acceptable but merely less suitable.
-- wordTested must remain the base vocabulary entry from the supplied word list.
-- The correct option may use the grammatically required inflected or derived form of wordTested, such as sound → sounds, study → studied, create → creating, or careful → carefully.
-- answerText must contain the exact option text shown to the student. Do not force the dictionary form when grammar requires a different form.
-`;
-
-      responseSchema.properties.vocabQuestions = {
-        type: Type.ARRAY,
-        items: {
-          type: Type.OBJECT,
-          properties: {
-            id: { type: Type.STRING },
-            question: { type: Type.STRING },
-            options: { type: Type.ARRAY, items: { type: Type.STRING } },
-            correctAnswer: { type: Type.STRING },
-            wordTested: { type: Type.STRING },
-            answerText: { type: Type.STRING },
-            explanation: { type: Type.STRING },
-          },
-          required: ["id", "question", "options", "correctAnswer", "wordTested", "explanation"],
-        },
-      };
-      responseSchema.required.push("vocabQuestions");
+      data.vocabQuestions = await buildVocabularySection(cleanVocabList, selectedLevel);
     }
 
     if (wantsReading) {
-      activeSections.push("readingPassages");
-      sectionInstructions += `
-READING SECTION
-- Create exactly one English passage for level ${selectedReadingLevels.join(", ")}.
-- The passage must contain 200-250 English words.
-- Create exactly four questions: main idea, detail, inference or tone, and vocabulary in context.
-- Every answer must be directly supported by the passage or by a necessary inference from it.
-- Each distractor must be clearly false, unsupported, too broad, too narrow, or opposite to the passage.
-- Do not write an option whose wording contradicts its own explanation.
-- The Traditional Chinese explanation must identify the relevant passage evidence and preserve the exact direction and polarity of the correct option.
-`;
-
-      responseSchema.properties.readingPassages = {
-        type: Type.ARRAY,
-        items: {
-          type: Type.OBJECT,
-          properties: {
-            level: { type: Type.STRING },
-            title: { type: Type.STRING },
-            passage: { type: Type.STRING },
-            questions: {
-              type: Type.ARRAY,
-              items: {
-                type: Type.OBJECT,
-                properties: {
-                  id: { type: Type.STRING },
-                  question: { type: Type.STRING },
-                  options: { type: Type.ARRAY, items: { type: Type.STRING } },
-                  correctAnswer: { type: Type.STRING },
-                  explanation: { type: Type.STRING },
-                },
-                required: ["id", "question", "options", "correctAnswer", "explanation"],
-              },
-            },
-          },
-          required: ["level", "title", "passage", "questions"],
-        },
-      };
-      responseSchema.required.push("readingPassages");
+      // The frontend currently calls this endpoint once per selected reading
+      // level, so return exactly one passage for the first requested level.
+      data.readingPassages = [
+        await buildReadingSection(String(selectedReadingLevels[0]), selectedLevel),
+      ];
     }
 
-    const writerSystemPrompt = `You are Tr. Shirley Du, a meticulous Taiwan GSAT English item writer.
-Write natural, standard English and academically precise Traditional Chinese explanations.
+    const finalData = addIds(data);
 
-NON-NEGOTIABLE QUALITY RULES
-1. Silently solve every question before assigning correctAnswer.
-2. correctAnswer must be one bare letter: A, B, C, or D.
-3. Options must be returned in A-B-C-D order and prefixed with (A), (B), (C), and (D).
-4. Exactly one option must be correct. Reject any item with two defensible answers. Do not create "best answer" items.
-5. Use a semantic lock: the sentence must contain enough context that the keyed option is uniquely required and the other three are clearly impossible.
-6. Grammar must be correct after the selected option is inserted into the sentence.
-7. The explanation must agree with the option text and with the source passage. Check negation, comparison, quantity, cause/effect, and time reference.
-8. The explanation must explicitly reject all three distractors. Never write that another option is possible, acceptable, positive, or merely less natural.
-9. Avoid awkward textbook English, dangling modifiers, unclear pronouns, unsupported inferences, and generic contexts that allow several adjectives or verbs.
-10. Do not manipulate content to create a particular answer-letter pattern. The server will reposition the actual correct option after validation.
-11. For vocabulary items, keep wordTested as the source-list lemma and allow ONLY the correct option to take the grammatical inflection required by the sentence.
-12. Vocabulary distractors must be different lemmas, not conjugations or derivatives of wordTested. Never create a four-choice word-family exercise.
-13. Return JSON only.`;
-
-    const writerUserPrompt = `Generate these sections: ${activeSections.join(", ")}.
-Target GSAT level: ${selectedLevel || "mixed"}.
-
-Vocabulary source:
-${vocabString}
-
-${sectionInstructions}
-Before returning JSON, silently perform a complete grammar, ambiguity, answer-key, and explanation-consistency check.`;
-
-    const auditorSystemPrompt = `You are the final senior editor for a Taiwan GSAT English examination.
-Your job is to REPAIR the supplied draft, not merely comment on it.
-Return a complete corrected JSON object in exactly the same structure.
-
-For every item, silently do all of the following:
-- Insert each option into the sentence and check grammar and natural usage.
-- Verify subject-verb agreement, tense, number, articles, prepositions, collocation, and word form.
-- For vocabulary items, confirm that the four options are four distinct lexical items. If several options are forms or derivatives of the same base word, rewrite the distractors using different vocabulary words from the supplied range.
-- Apply the adversarial alternative-fit test: insert every distractor and ask whether a fluent English teacher could reasonably defend it in the exact context.
-- Confirm that exactly one option is defensible. If any distractor is merely weaker, less natural, or less precise rather than clearly wrong, rewrite the sentence or replace the distractor.
-- Reject generic evaluative contexts that permit several adjectives, such as an athlete's ___ performance impressed everyone.
-- Independently solve the item and set correctAnswer to the truly correct option.
-- Rewrite the question or distractors whenever ambiguity exists; do not preserve a flawed draft.
-- Compare the explanation against the exact option wording. Correct any reversal such as less/more, increase/decrease, can/cannot, before/after, or positive/negative.
-- For reading items, verify the answer against explicit passage evidence or a necessary inference.
-- In every vocabulary explanation, explain why the correct option is required and why each of the other three is impossible in this exact sentence.
-- Never use wording such as「雖然也可以，但……更適合」、「最佳」、「較貼切」、「更能強調」or any equivalent admission that another choice could fit.
-- Keep explanations in Traditional Chinese and all passage text in English.
-- Keep exactly 10 vocabulary questions when present, exactly one passage, and exactly four reading questions.
-Return JSON only.`;
-
-    let finalData: any = null;
-    let lastError: any = null;
-
-    // A fresh draft plus a separate editorial pass is much more reliable than a
-    // single prompt. Retry once if structural validation still fails.
-    for (let attempt = 0; attempt < 2; attempt++) {
-      try {
-        const draft = await callJsonModel(writerSystemPrompt, writerUserPrompt, responseSchema, 0.35);
-        const normalizedDraft = normalizeGeneratedData(draft);
-
-        const auditPrompt = `Audit and repair this draft. Do not discuss your changes. Return the complete corrected JSON only:\n${JSON.stringify(normalizedDraft)}`;
-        const audited = await callJsonModel(auditorSystemPrompt, auditPrompt, responseSchema, 0.1);
-        const normalizedAudited = normalizeGeneratedData(audited);
-
-        validateExamData(normalizedAudited, wantsVocab, wantsReading);
-        finalData = addStableIds(balanceAnswerPositions(normalizedAudited));
-        validateExamData(finalData, wantsVocab, wantsReading);
-        break;
-      } catch (error) {
-        lastError = error;
-        console.warn(`Generation quality attempt ${attempt + 1} failed:`, error);
-      }
-    }
-
-    if (!finalData) {
-      throw lastError || new Error("Unable to generate a fully validated exam.");
-    }
-
-    const answerDistribution = (questions: any[] = []) =>
-      questions.reduce((acc: Record<string, number>, q: any) => {
-        const key = normalizeAnswerLetter(q.correctAnswer);
-        acc[key] = (acc[key] || 0) + 1;
-        return acc;
-      }, { A: 0, B: 0, C: 0, D: 0 });
-
-    res.json({
+    return res.json({
       success: true,
       data: finalData,
       qualityAssurance: {
-        editorialPassCompleted: true,
-        structuralValidationPassed: true,
-        vocabAnswerDistribution: answerDistribution(finalData.vocabQuestions),
-        readingAnswerDistributions: (finalData.readingPassages || []).map((p: any) => answerDistribution(p.questions)),
-        vocabAnswerSequence: (finalData.vocabQuestions || []).map((q: any) => q.correctAnswer).join(""),
-        readingAnswerSequences: (finalData.readingPassages || []).map((p: any) =>
-          (p.questions || []).map((q: any) => q.correctAnswer).join("")
+        itemLevelRepairEnabled: true,
+        independentEditorialReviewCompleted: true,
+        answerPlacementMethod: "move-correct-option-then-derive-letter",
+        answerPatternPolicy: "balanced-but-unpredictable",
+        vocabAnswerDistribution: distribution(finalData.vocabQuestions || []),
+        vocabAnswerSequence: (finalData.vocabQuestions || [])
+          .map((question) => question.correctAnswer)
+          .join(""),
+        readingAnswerDistributions: (finalData.readingPassages || []).map((passage) =>
+          distribution(passage.questions),
+        ),
+        readingAnswerSequences: (finalData.readingPassages || []).map((passage) =>
+          passage.questions.map((question) => question.correctAnswer).join(""),
         ),
       },
     });
   } catch (error: any) {
-    console.error("GSAT Buffet Generation Error:", error);
-    res.status(500).json({ success: false, error: error.message || "An unexpected error occurred." });
+    console.error("GSAT generation error:", error);
+    return res.status(500).json({
+      success: false,
+      error: error?.message || "An unexpected generation error occurred.",
+    });
   }
 });
 
 app.post("/api/evaluate-report", async (req, res) => {
   try {
-    const { scoreSummary, details, selectedLevel } = req.body;
     verifyApiKeys();
+    const { scoreSummary, selectedLevel } = req.body || {};
 
-    const systemPrompt = `You are Tr. Shirley Du, an English educator in Taiwan specializing in GSAT preparation.
-Your style is extremely warm, caring, humorous, encouraging, and deeply professional.
-You talk in Traditional Chinese (using Taiwan idioms like 衝刺, 奠定基礎, 答對率, 魔鬼細節, 學測大關, 備考 etc.).`;
+    const systemPrompt = `You are Tr. Shirley Du, a warm, professional Taiwan GSAT English teacher.
+Write in natural Traditional Chinese. Return JSON only.`;
 
-    const userPrompt = `Please write a highly supportive, personalized progress commentary report as Tr. Shirley Du.
-The user's exam performance:
-- Overall Score: ${scoreSummary.comprehensive.correct}/${scoreSummary.comprehensive.total} (Accuracy: ${scoreSummary.comprehensive.score}%)
-- Vocabulary section: ${scoreSummary.vocab.correct}/${scoreSummary.vocab.total}
-- Reading comprehension: ${scoreSummary.reading.correct}/${scoreSummary.reading.total}
-- Practiced Level: GSAT Level ${selectedLevel || "Mixed"}
+    const userPrompt = `Write a supportive progress report.
+Overall: ${scoreSummary?.comprehensive?.correct ?? 0}/${scoreSummary?.comprehensive?.total ?? 0} (${scoreSummary?.comprehensive?.score ?? 0}%)
+Vocabulary: ${scoreSummary?.vocab?.correct ?? 0}/${scoreSummary?.vocab?.total ?? 0}
+Reading: ${scoreSummary?.reading?.correct ?? 0}/${scoreSummary?.reading?.total ?? 0}
+Level: ${selectedLevel || "Mixed"}
 
-Provide:
-1. "greeting": A warm greeting addressing the student's status.
-2. "analysis": A professional yet heartening review of strengths and blindspots.
-3. "tips": 3 actionable GSAT English study tips tailored to their score.
-4. "encouragement": An inspirational closing sentence.
+Return exactly:
+{
+  "greeting": "...",
+  "analysis": "...",
+  "tips": ["...", "...", "..."],
+  "encouragement": "..."
+}`;
 
-Return JSON with exactly: greeting, analysis, tips (array of 3 strings), encouragement.`;
+    const schema = {
+      type: Type.OBJECT,
+      properties: {
+        greeting: { type: Type.STRING },
+        analysis: { type: Type.STRING },
+        tips: { type: Type.ARRAY, items: { type: Type.STRING } },
+        encouragement: { type: Type.STRING },
+      },
+      required: ["greeting", "analysis", "tips", "encouragement"],
+    };
 
-    let outputText = "";
-    if (process.env.OPENAI_API_KEY) {
-      const openai = getOpenAI();
-      const model = process.env.OPENAI_API_MODEL || "gpt-4o-mini";
-      const response = await openai.chat.completions.create({
-        model,
-        messages: [
-          { role: "system", content: systemPrompt },
-          { role: "user", content: userPrompt }
-        ],
-        response_format: { type: "json_object" },
-        temperature: 0.8,
-      });
-      outputText = response.choices[0].message.content || "";
-    } else {
-      const ai = getGenAI();
-      const response = await ai.models.generateContent({
-        model: "gemini-2.5-flash",
-        contents: userPrompt,
-        config: {
-          systemInstruction: systemPrompt,
-          responseMimeType: "application/json",
-          responseSchema: {
-            type: Type.OBJECT,
-            properties: {
-              greeting: { type: Type.STRING },
-              analysis: { type: Type.STRING },
-              tips: { type: Type.ARRAY, items: { type: Type.STRING } },
-              encouragement: { type: Type.STRING }
-            },
-            required: ["greeting", "analysis", "tips", "encouragement"]
-          },
-          temperature: 0.8,
-        },
-      });
-      outputText = response.text || "";
-    }
-
-    if (!outputText) throw new Error("No response received from evaluation model.");
-    const reportData = JSON.parse(outputText);
-    res.json({ success: true, data: reportData });
+    const report = await callJsonModel<any>(systemPrompt, userPrompt, schema, 0.65);
+    return res.json({ success: true, data: report });
   } catch (error: any) {
-    console.error("GSAT Evaluation Report Error:", error);
-    res.status(500).json({ success: false, error: error.message || "An unexpected error occurred." });
+    console.error("GSAT evaluation error:", error);
+    return res.status(500).json({
+      success: false,
+      error: error?.message || "An unexpected evaluation error occurred.",
+    });
   }
 });
 
-async function startServer() {
+async function startServer(): Promise<void> {
   if (process.env.NODE_ENV !== "production") {
     const { createServer: createViteServer } = await import("vite");
-    const vite = await createViteServer({ server: { middlewareMode: true }, appType: "spa" });
+    const vite = await createViteServer({
+      server: { middlewareMode: true },
+      appType: "spa",
+    });
     app.use(vite.middlewares);
   } else {
     const distPath = path.join(process.cwd(), "dist");
     app.use(express.static(distPath));
-    app.get("*", (req, res) => { res.sendFile(path.join(distPath, "index.html")); });
+    app.get("*", (_req, res) => {
+      res.sendFile(path.join(distPath, "index.html"));
+    });
   }
+
   app.listen(PORT, "0.0.0.0", () => {
-    console.log(`[Back-End Services] Running smoothly on http://localhost:${PORT}`);
+    console.log(`[Back-End Services] Running on http://localhost:${PORT}`);
   });
 }
 
 if (!process.env.VERCEL && process.env.IS_SERVERLESS !== "true") {
-  startServer();
+  void startServer();
 }
 
 export default app;
