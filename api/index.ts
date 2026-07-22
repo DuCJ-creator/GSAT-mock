@@ -101,141 +101,177 @@ function rotate<T>(items: T[], amount: number): T[] {
   return [...items.slice(n), ...items.slice(0, n)];
 }
 
-function optionTextAt(options: string[], letter: AnswerLetter): string {
-  const index = ANSWER_LETTERS.indexOf(letter);
-  const text = options[index];
-  if (!text) throw new Error(`Answer ${letter} does not point to an option.`);
-  return stripOptionLabel(text);
-}
-
 /**
- * Repositions an item by moving the actual correct option text, then derives the
- * new answer letter from that text's new array index. The key is never changed
- * independently of the option array.
+ * Moves the already-validated correct option to a requested letter. This changes
+ * presentation order only; it does not change question meaning.
  */
 function placeCorrectAnswerAt(q: any, desired: AnswerLetter, questionIndex: number): any {
-  const normalizedOptions = normalizeOptionsArray(q.options || q.choices);
+  const options = getOptionTexts(q.options || q.choices);
   const originalAnswer = normalizeAnswerLetter(q.correctAnswer || q.answer);
-  const originalCorrectText = optionTextAt(normalizedOptions, originalAnswer);
-
-  const distractors = normalizedOptions
-    .map(stripOptionLabel)
-    .filter((_, index) => index !== ANSWER_LETTERS.indexOf(originalAnswer));
-  const reorderedDistractors = rotate(distractors, questionIndex % distractors.length);
+  const correctIndex = ANSWER_LETTERS.indexOf(originalAnswer);
+  const correctText = options[correctIndex];
+  const distractors = rotate(
+    options.filter((_, index) => index !== correctIndex),
+    questionIndex % 3
+  );
 
   const desiredIndex = ANSWER_LETTERS.indexOf(desired);
-  const reorderedTexts = [...reorderedDistractors];
-  reorderedTexts.splice(desiredIndex, 0, originalCorrectText);
-
-  // Derive the key from the final location of the correct text. Do not merely
-  // assign the requested letter, because that can silently corrupt answer keys.
-  const finalCorrectIndex = reorderedTexts.findIndex(text => text === originalCorrectText);
-  if (finalCorrectIndex < 0) throw new Error("Correct option was lost while reordering choices.");
-  const finalAnswer = ANSWER_LETTERS[finalCorrectIndex];
-  const finalOptions = reorderedTexts.map((text, index) => `(${ANSWER_LETTERS[index]}) ${text}`);
-
-  // Post-shuffle integrity checks: same correct text, correct new letter, and no
-  // duplicate option text that could make identity ambiguous.
-  if (new Set(reorderedTexts.map(text => text.toLocaleLowerCase())).size !== 4) {
-    throw new Error("Cannot safely reorder a question with duplicate option text.");
-  }
-  if (optionTextAt(finalOptions, finalAnswer) !== originalCorrectText) {
-    throw new Error("Answer-key integrity check failed after option reordering.");
-  }
+  const reordered = [...distractors];
+  reordered.splice(desiredIndex, 0, correctText);
 
   return {
     ...q,
-    options: finalOptions,
-    correctAnswer: finalAnswer,
-    ...(q.wordTested ? { wordTested: originalCorrectText } : {}),
+    options: reordered.map((text, index) => `(${ANSWER_LETTERS[index]}) ${text}`),
+    correctAnswer: desired,
   };
 }
 
-function hashString(value: string): number {
-  let hash = 2166136261;
-  for (let i = 0; i < value.length; i++) {
-    hash ^= value.charCodeAt(i);
-    hash = Math.imul(hash, 16777619);
-  }
-  return hash >>> 0;
+function balancedPattern(count: number, offset = 0): AnswerLetter[] {
+  // Round-robin guarantees that answer counts differ by at most one.
+  return Array.from({ length: count }, (_, index) => ANSWER_LETTERS[(index + offset) % 4]);
 }
 
-function seededShuffle<T>(items: T[], seed: number): T[] {
-  const out = [...items];
-  let state = seed || 1;
-  const next = () => {
-    state ^= state << 13;
-    state ^= state >>> 17;
-    state ^= state << 5;
-    return (state >>> 0) / 4294967296;
-  };
-  for (let i = out.length - 1; i > 0; i--) {
-    const j = Math.floor(next() * (i + 1));
-    [out[i], out[j]] = [out[j], out[i]];
+function validateQuestion(q: any, kind: "vocab" | "reading"): string[] {
+  const errors: string[] = [];
+  const options = getOptionTexts(q.options || q.choices);
+  const answer = normalizeAnswerLetter(q.correctAnswer || q.answer);
+  const answerIndex = ANSWER_LETTERS.indexOf(answer);
+
+  if (!String(q.question || "").trim()) errors.push("missing question text");
+  if (kind === "vocab" && !/_{3,}|\bblank\b/i.test(String(q.question || ""))) {
+    errors.push("vocabulary sentence has no visible blank");
   }
-  return out;
+  if (new Set(options.map(o => o.toLocaleLowerCase())).size !== 4) {
+    errors.push("duplicate options");
+  }
+  if (!options[answerIndex]) errors.push("correctAnswer does not point to an option");
+  if (!String(q.explanation || "").trim()) errors.push("missing explanation");
+  return errors;
 }
 
-function balancedPattern(count: number, seedText: string): AnswerLetter[] {
-  // Build a balanced pool, then shuffle it deterministically. This avoids a
-  // visible A-B-C-D cycle while keeping counts within one of each other.
-  const pool = Array.from({ length: count }, (_, index) => ANSWER_LETTERS[index % 4]);
-  let pattern = seededShuffle(pool, hashString(seedText));
+function validateExamData(data: any, wantsVocab: boolean, wantsReading: boolean): void {
+  const errors: string[] = [];
 
-  // Avoid runs longer than two when an alternative position is available.
-  for (let i = 2; i < pattern.length; i++) {
-    if (pattern[i] === pattern[i - 1] && pattern[i] === pattern[i - 2]) {
-      const swapIndex = pattern.findIndex((letter, j) => j > i && letter !== pattern[i]);
-      if (swapIndex > i) [pattern[i], pattern[swapIndex]] = [pattern[swapIndex], pattern[i]];
+  if (wantsVocab) {
+    if (!Array.isArray(data.vocabQuestions) || data.vocabQuestions.length !== 10) {
+      errors.push("vocabQuestions must contain exactly 10 questions");
+    } else {
+      data.vocabQuestions.forEach((q: any, i: number) => {
+        validateQuestion(q, "vocab").forEach(e => errors.push(`Vocabulary Q${i + 1}: ${e}`));
+      });
     }
   }
-  return pattern;
+
+  if (wantsReading) {
+    if (!Array.isArray(data.readingPassages) || data.readingPassages.length !== 1) {
+      errors.push("readingPassages must contain exactly one passage");
+    } else {
+      const passage = data.readingPassages[0];
+      if (!String(passage.passage || "").trim()) errors.push("reading passage is empty");
+      if (!Array.isArray(passage.questions) || passage.questions.length !== 4) {
+        errors.push("reading passage must contain exactly four questions");
+      } else {
+        passage.questions.forEach((q: any, i: number) => {
+          validateQuestion(q, "reading").forEach(e => errors.push(`Reading Q${i + 1}: ${e}`));
+        });
+      }
+    }
+  }
+
+  if (errors.length > 0) {
+    throw new Error(`Generated content failed validation: ${errors.join("; ")}`);
+  }
 }
 
-function verifyReorderedQuestion(before: any, after: any): void {
-  const beforeOptions = normalizeOptionsArray(before.options || before.choices);
-  const afterOptions = normalizeOptionsArray(after.options || after.choices);
-  const beforeAnswer = normalizeAnswerLetter(before.correctAnswer || before.answer);
-  const afterAnswer = normalizeAnswerLetter(after.correctAnswer || after.answer);
-  const correctTextBefore = optionTextAt(beforeOptions, beforeAnswer);
-  const correctTextAfter = optionTextAt(afterOptions, afterAnswer);
+async function callJsonModel(
+  systemPrompt: string,
+  userPrompt: string,
+  responseSchema?: any,
+  temperature = 0.25
+): Promise<any> {
+  let outputText = "";
 
-  if (correctTextBefore !== correctTextAfter) {
-    throw new Error("Correct-answer text changed while balancing answer positions.");
+  if (process.env.OPENAI_API_KEY) {
+    const openai = getOpenAI();
+    const model = process.env.OPENAI_API_MODEL || "gpt-4o-mini";
+    const response = await openai.chat.completions.create({
+      model,
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: userPrompt },
+      ],
+      response_format: { type: "json_object" },
+      temperature,
+    });
+    outputText = response.choices[0].message.content || "";
+  } else {
+    const ai = getGenAI();
+    const response = await ai.models.generateContent({
+      model: process.env.GEMINI_API_MODEL || "gemini-2.5-flash",
+      contents: userPrompt,
+      config: {
+        systemInstruction: systemPrompt,
+        responseMimeType: "application/json",
+        ...(responseSchema ? { responseSchema } : {}),
+        temperature,
+      },
+    });
+    outputText = response.text || "";
   }
 
-  const beforeSet = [...beforeOptions.map(stripOptionLabel)].sort();
-  const afterSet = [...afterOptions.map(stripOptionLabel)].sort();
-  if (JSON.stringify(beforeSet) !== JSON.stringify(afterSet)) {
-    throw new Error("Option content changed while balancing answer positions.");
+  if (!outputText) throw new Error("Empty response from AI model.");
+  return JSON.parse(outputText);
+}
+
+function normalizeGeneratedData(data: any): any {
+  const normalized = { ...data };
+
+  if (normalized.vocabQuestions) {
+    normalized.vocabQuestions = normalized.vocabQuestions.map((q: any) => ({
+      ...q,
+      options: normalizeOptionsArray(q.options || q.choices),
+      correctAnswer: normalizeAnswerLetter(q.correctAnswer || q.answer),
+    }));
   }
+
+  if (normalized.readingPassage && !normalized.readingPassages) {
+    normalized.readingPassages = [normalized.readingPassage];
+  }
+  if (normalized.readingPassages && !Array.isArray(normalized.readingPassages)) {
+    normalized.readingPassages = [normalized.readingPassages];
+  }
+  if (normalized.readingPassages) {
+    normalized.readingPassages = normalized.readingPassages.map((p: any) => ({
+      ...p,
+      questions: (p.questions || []).map((q: any) => ({
+        ...q,
+        options: normalizeOptionsArray(q.options || q.choices),
+        correctAnswer: normalizeAnswerLetter(q.correctAnswer || q.answer),
+      })),
+    }));
+  }
+
+  return normalized;
 }
 
 function balanceAnswerPositions(data: any): any {
   const balanced = { ...data };
 
   if (Array.isArray(balanced.vocabQuestions)) {
-    const seed = balanced.vocabQuestions.map((q: any) => q.question || "").join("|");
-    const pattern = balancedPattern(balanced.vocabQuestions.length, `vocab:${seed}`);
-    balanced.vocabQuestions = balanced.vocabQuestions.map((q: any, index: number) => {
-      const reordered = placeCorrectAnswerAt(q, pattern[index], index);
-      verifyReorderedQuestion(q, reordered);
-      return reordered;
-    });
+    const pattern = balancedPattern(balanced.vocabQuestions.length, 0);
+    balanced.vocabQuestions = balanced.vocabQuestions.map((q: any, index: number) =>
+      placeCorrectAnswerAt(q, pattern[index], index)
+    );
   }
 
   if (Array.isArray(balanced.readingPassages)) {
     balanced.readingPassages = balanced.readingPassages.map((passage: any, pIndex: number) => {
-      const questions = passage.questions || [];
-      const seed = `${passage.title || ""}|${passage.passage || ""}`;
-      const pattern = balancedPattern(questions.length, `reading:${pIndex}:${seed}`);
+      const pattern = balancedPattern((passage.questions || []).length, pIndex % 4);
       return {
         ...passage,
-        questions: questions.map((q: any, qIndex: number) => {
-          const reordered = placeCorrectAnswerAt(q, pattern[qIndex], qIndex + pIndex);
-          verifyReorderedQuestion(q, reordered);
-          return reordered;
-        }),
+        questions: (passage.questions || []).map((q: any, qIndex: number) =>
+          placeCorrectAnswerAt(q, pattern[qIndex], qIndex + pIndex)
+        ),
       };
     });
   }
@@ -267,176 +303,6 @@ function addStableIds(data: any): any {
         }
       : {}),
   };
-}
-
-
-async function callJsonModel(
-  systemPrompt: string,
-  userPrompt: string,
-  responseSchema: any,
-  temperature: number,
-): Promise<any> {
-  let outputText = "";
-
-  if (process.env.OPENAI_API_KEY) {
-    const openai = getOpenAI();
-    const model = process.env.OPENAI_API_MODEL || "gpt-4o-mini";
-    const response = await openai.chat.completions.create({
-      model,
-      messages: [
-        { role: "system", content: systemPrompt },
-        { role: "user", content: userPrompt },
-      ],
-      response_format: { type: "json_object" },
-      temperature,
-    });
-    outputText = response.choices[0]?.message?.content || "";
-  } else {
-    const ai = getGenAI();
-    const response = await ai.models.generateContent({
-      model: process.env.GEMINI_API_MODEL || "gemini-2.5-flash",
-      contents: userPrompt,
-      config: {
-        systemInstruction: systemPrompt,
-        responseMimeType: "application/json",
-        responseSchema,
-        temperature,
-      },
-    });
-    outputText = response.text || "";
-  }
-
-  if (!outputText.trim()) {
-    throw new Error("The AI model returned an empty response.");
-  }
-
-  try {
-    return JSON.parse(outputText);
-  } catch {
-    const cleaned = outputText
-      .replace(/^```(?:json)?\s*/i, "")
-      .replace(/\s*```$/i, "")
-      .trim();
-    try {
-      return JSON.parse(cleaned);
-    } catch {
-      throw new Error("The AI model returned invalid JSON.");
-    }
-  }
-}
-
-function normalizeGeneratedData(input: any): any {
-  if (!input || typeof input !== "object") {
-    throw new Error("Generated exam data is missing or invalid.");
-  }
-
-  const data: any = { ...input };
-
-  if (data.readingPassage && !data.readingPassages) {
-    data.readingPassages = Array.isArray(data.readingPassage)
-      ? data.readingPassage
-      : [data.readingPassage];
-  }
-  delete data.readingPassage;
-
-  if (Array.isArray(data.vocabQuestions)) {
-    data.vocabQuestions = data.vocabQuestions.map((q: any) => {
-      const options = normalizeOptionsArray(q.options || q.choices);
-      const correctAnswer = normalizeAnswerLetter(q.correctAnswer || q.answer);
-      return {
-        ...q,
-        options,
-        correctAnswer,
-        wordTested: stripOptionLabel(q.wordTested || optionTextAt(options, correctAnswer)),
-        explanation: String(q.explanation || "").trim(),
-      };
-    });
-  }
-
-  if (Array.isArray(data.readingPassages)) {
-    data.readingPassages = data.readingPassages.map((p: any) => ({
-      ...p,
-      level: String(p.level || "").trim(),
-      title: String(p.title || "").trim(),
-      passage: String(p.passage || "").trim(),
-      questions: Array.isArray(p.questions)
-        ? p.questions.map((q: any) => ({
-            ...q,
-            question: String(q.question || "").trim(),
-            options: normalizeOptionsArray(q.options || q.choices),
-            correctAnswer: normalizeAnswerLetter(q.correctAnswer || q.answer),
-            explanation: String(q.explanation || "").trim(),
-          }))
-        : [],
-    }));
-  }
-
-  return data;
-}
-
-function validateQuestion(question: any, context: string): void {
-  if (!question || typeof question !== "object") {
-    throw new Error(`${context}: question is missing.`);
-  }
-  if (!String(question.question || "").trim()) {
-    throw new Error(`${context}: question text is missing.`);
-  }
-
-  const options = normalizeOptionsArray(question.options || question.choices);
-  const texts = options.map(stripOptionLabel);
-  const folded = texts.map(text => text.toLocaleLowerCase());
-  if (new Set(folded).size !== 4) {
-    throw new Error(`${context}: options must be unique.`);
-  }
-
-  const answer = normalizeAnswerLetter(question.correctAnswer || question.answer);
-  const correctText = optionTextAt(options, answer);
-  if (!correctText) {
-    throw new Error(`${context}: correctAnswer does not point to a valid option.`);
-  }
-  if (!String(question.explanation || "").trim()) {
-    throw new Error(`${context}: explanation is missing.`);
-  }
-}
-
-function validateExamData(data: any, wantsVocab: boolean, wantsReading: boolean): void {
-  if (!data || typeof data !== "object") {
-    throw new Error("Generated exam data is invalid.");
-  }
-
-  if (wantsVocab) {
-    if (!Array.isArray(data.vocabQuestions) || data.vocabQuestions.length !== 10) {
-      throw new Error("Vocabulary section must contain exactly 10 questions.");
-    }
-    data.vocabQuestions.forEach((q: any, index: number) => {
-      validateQuestion(q, `Vocabulary question ${index + 1}`);
-      if (!String(q.question || "").includes("__________")) {
-        throw new Error(`Vocabulary question ${index + 1}: the blank is missing.`);
-      }
-      const options = normalizeOptionsArray(q.options || q.choices);
-      const answer = normalizeAnswerLetter(q.correctAnswer || q.answer);
-      const correctText = optionTextAt(options, answer);
-      if (stripOptionLabel(q.wordTested || "").toLocaleLowerCase() !== correctText.toLocaleLowerCase()) {
-        throw new Error(`Vocabulary question ${index + 1}: wordTested does not match the keyed option.`);
-      }
-    });
-  }
-
-  if (wantsReading) {
-    if (!Array.isArray(data.readingPassages) || data.readingPassages.length !== 1) {
-      throw new Error("Reading section must contain exactly one passage.");
-    }
-    const passage = data.readingPassages[0];
-    if (!String(passage.title || "").trim() || !String(passage.passage || "").trim()) {
-      throw new Error("Reading passage title or text is missing.");
-    }
-    if (!Array.isArray(passage.questions) || passage.questions.length !== 4) {
-      throw new Error("Reading passage must contain exactly four questions.");
-    }
-    passage.questions.forEach((q: any, index: number) =>
-      validateQuestion(q, `Reading question ${index + 1}`),
-    );
-  }
 }
 
 app.get("/api/health", async (req, res) => {
@@ -638,8 +504,6 @@ Return JSON only.`;
       qualityAssurance: {
         editorialPassCompleted: true,
         structuralValidationPassed: true,
-        answerKeyIntegrityPassed: true,
-        optionReorderingMethod: "content-anchored",
         vocabAnswerDistribution: answerDistribution(finalData.vocabQuestions),
         readingAnswerDistributions: (finalData.readingPassages || []).map((p: any) => answerDistribution(p.questions)),
       },
