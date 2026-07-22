@@ -778,6 +778,22 @@ function distribution(questions: ExamQuestion[] = []): Record<AnswerLetter, numb
   );
 }
 
+
+function validateExamData(data: ExamData): string[] {
+  const errors: string[] = [];
+  (data.vocabQuestions || []).forEach((question, index) => {
+    validateQuestion(question, "vocab").forEach((error) =>
+      errors.push(`Vocabulary Q${index + 1}: ${error}`),
+    );
+  });
+  (data.readingPassages || []).forEach((passage, index) => {
+    validatePassage(passage).forEach((error) =>
+      errors.push(`Reading passage ${index + 1}: ${error}`),
+    );
+  });
+  return errors;
+}
+
 // -----------------------------------------------------------------------------
 // Routes
 // -----------------------------------------------------------------------------
@@ -843,11 +859,31 @@ app.post("/api/generate", async (req, res) => {
     }
 
     const finalData = addIds(data);
+    const finalValidationErrors = validateExamData(finalData);
+    if (finalValidationErrors.length > 0) {
+      throw new Error(`Final item-bank QA failed: ${finalValidationErrors.join("; ")}`);
+    }
 
     return res.json({
       success: true,
       data: finalData,
       qualityAssurance: {
+        // Compatibility flags consumed by the current App.tsx.
+        editorialPassCompleted: true,
+        structuralValidationPassed: true,
+
+        // Item Generation Engine diagnostics.
+        engineVersion: "2.0.0",
+        pipeline: [
+          "generate",
+          "normalize",
+          "deterministic-validate",
+          "editorial-review",
+          "item-level-repair-or-replace",
+          "move-correct-option",
+          "balanced-unpredictable-placement",
+          "final-qa",
+        ],
         itemLevelRepairEnabled: true,
         independentEditorialReviewCompleted: true,
         answerPlacementMethod: "move-correct-option-then-derive-letter",
