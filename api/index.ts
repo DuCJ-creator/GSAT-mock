@@ -180,6 +180,23 @@ function placeCorrectAnswerAt(q: any, desired: AnswerLetter): any {
   };
 }
 
+function hasWordFamilyCluster(options: string[]): boolean {
+  const cleaned = options.map(option =>
+    stripOptionLabel(option).toLowerCase().replace(/[^a-z]/g, "")
+  );
+
+  // Reject obvious word-family exercises such as implement / implemented /
+  // implementing / implementation. A legitimate item such as sounds / hurt /
+  // begin / remain will not trigger this rule.
+  for (const word of cleaned) {
+    if (word.length < 5) continue;
+    const prefix = word.slice(0, 5);
+    const relatedCount = cleaned.filter(other => other.startsWith(prefix)).length;
+    if (relatedCount >= 3) return true;
+  }
+  return false;
+}
+
 function validateQuestion(q: any, kind: "vocab" | "reading"): string[] {
   const errors: string[] = [];
   const options = getOptionTexts(q.options || q.choices);
@@ -192,6 +209,9 @@ function validateQuestion(q: any, kind: "vocab" | "reading"): string[] {
   }
   if (new Set(options.map(o => o.toLocaleLowerCase())).size !== 4) {
     errors.push("duplicate options");
+  }
+  if (kind === "vocab" && hasWordFamilyCluster(options)) {
+    errors.push("options form a word-family/conjugation cluster instead of testing distinct vocabulary");
   }
   if (!options[answerIndex]) errors.push("correctAnswer does not point to an option");
   if (!String(q.explanation || "").trim()) errors.push("missing explanation");
@@ -412,9 +432,12 @@ app.post("/api/generate", async (req, res) => {
 VOCABULARY SECTION
 - Create exactly 10 single-sentence vocabulary multiple-choice questions.
 - Each question must contain one visible blank written as __________.
-- All four options must be the same part of speech and use the grammatical form required by the sentence.
+- The item must test VOCABULARY CHOICE, not word-family or conjugation recognition.
+- The four options must be four different vocabulary items (different lemmas), preferably drawn from the supplied vocabulary range. Do NOT present four forms or derivatives of the same word, such as implement / implemented / implementing / implementation.
+- Distractors must be semantically plausible but lexically different words. They should match the grammatical slot required by the sentence, but must not be alternative forms of wordTested.
+- The correct option may inflect ONLY when ordinary sentence grammar requires it. Examples: sound -> sounds after a singular subject; study -> studied for past tense; child -> children for plural. This grammatical adjustment must not become the focus of the item.
 - Subject-verb agreement, tense, number, articles, prepositions, collocations, and punctuation must all be correct.
-- Do not create a sentence in which the intended answer needs inflection but the option is shown in its base form. Example: write "sounds" rather than "sound" after a singular subject in the simple present.
+- Do not leave the intended answer in its dictionary form when the sentence requires inflection. Example: write "sounds" rather than "sound" after a singular subject in the simple present.
 - Do not use "too" to mean "also" before a main verb. Use "also" in that position, or place "too" naturally at the end of the clause.
 - Exactly one option must be semantically and grammatically possible. Avoid near-synonyms that could both fit.
 - The Traditional Chinese explanation must state the same meaning, direction, polarity, and comparison as the selected option. Never explain "more important" when the option says "less important," or vice versa.
@@ -496,8 +519,9 @@ NON-NEGOTIABLE QUALITY RULES
 6. The explanation must agree with the option text and with the source passage. Check negation, comparison, quantity, cause/effect, and time reference.
 7. Avoid awkward textbook English, dangling modifiers, unclear pronouns, and unsupported inferences.
 8. Do not manipulate content to create a particular answer-letter pattern. The server will reposition the actual correct option after validation.
-9. For vocabulary items, keep wordTested as the source-list lemma and allow the correct option to use the grammatical form required by the sentence.
-10. Return JSON only.`;
+9. For vocabulary items, keep wordTested as the source-list lemma and allow ONLY the correct option to take the grammatical inflection required by the sentence.
+10. Vocabulary distractors must be different lemmas, not conjugations or derivatives of wordTested. Never create a four-choice word-family exercise.
+11. Return JSON only.`;
 
     const writerUserPrompt = `Generate these sections: ${activeSections.join(", ")}.
 Target GSAT level: ${selectedLevel || "mixed"}.
@@ -515,6 +539,7 @@ Return a complete corrected JSON object in exactly the same structure.
 For every item, silently do all of the following:
 - Insert each option into the sentence and check grammar and natural usage.
 - Verify subject-verb agreement, tense, number, articles, prepositions, collocation, and word form.
+- For vocabulary items, confirm that the four options are four distinct lexical items. If several options are forms or derivatives of the same base word, rewrite the distractors using different vocabulary words from the supplied range.
 - Confirm that exactly one option is defensible.
 - Independently solve the item and set correctAnswer to the truly correct option.
 - Rewrite the question or distractors when ambiguity exists.
