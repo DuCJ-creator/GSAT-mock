@@ -215,30 +215,14 @@ export default function App() {
     }
   };
 
-  // Quality assurance is checked per API response. Answer distribution is metadata only:
-  // it must never invalidate an otherwise correct question set.
-  const assertQualityAssurance = (payload: any, expectedSection: "vocab" | "reading") => {
-    if (!payload?.success || !payload?.data) {
-      throw new Error(payload?.error || "生成服務未回傳有效試題資料。");
+  const assertQualityAssurance = (payload: any) => {
+    const qa = payload?.qualityAssurance;
+    if (!qa?.editorialPassCompleted || !qa?.structuralValidationPassed) {
+      throw new Error("試題未完成文法、歧義與答案一致性審核，請重新生成。");
     }
-
-    const qa = payload.qualityAssurance;
-    if (qa && (qa.editorialPassCompleted === false || qa.structuralValidationPassed === false)) {
-      throw new Error("試題未通過文法、歧義與答案一致性審核，請重新生成。");
-    }
-
-    if (expectedSection === "vocab") {
-      if (!Array.isArray(payload.data.vocabQuestions) || payload.data.vocabQuestions.length === 0) {
-        throw new Error("字彙題生成結果不完整，請重新生成。");
-      }
-      return;
-    }
-
-    const passages = payload.data.readingPassages || payload.data.readingPassage;
-    const passageList = Array.isArray(passages) ? passages : passages ? [passages] : [];
-    if (passageList.length === 0) {
-      throw new Error("閱讀測驗生成結果不完整，請重新生成。");
-    }
+    // Answer-distribution metadata is informational only. The server is
+    // responsible for creating a balanced-but-unpredictable key and for
+    // preserving the actual correct option while moving it.
   };
 
   const handleGenerateExam = async () => {
@@ -304,7 +288,7 @@ export default function App() {
         if (!resVocab.ok) throw new Error(await getErrorMsg(resVocab));
 
         const resVocabData = await resVocab.json();
-        assertQualityAssurance(resVocabData, "vocab");
+        assertQualityAssurance(resVocabData);
         console.log("RAW Q1 options:", JSON.stringify(resVocabData.data?.vocabQuestions?.[0]?.options));
 
         if (resVocabData.success && resVocabData.data && resVocabData.data.vocabQuestions) {
@@ -347,7 +331,7 @@ export default function App() {
           if (!resReading.ok) throw new Error(await getErrorMsg(resReading));
 
           const resReadingData = await resReading.json();
-          assertQualityAssurance(resReadingData, "reading");
+          assertQualityAssurance(resReadingData);
           console.log("RAW READING RESPONSE:", JSON.stringify(resReadingData, null, 2));
 
           if (resReadingData.success && resReadingData.data) {
