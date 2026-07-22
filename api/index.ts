@@ -202,6 +202,7 @@ function validateQuestion(q: any, kind: "vocab" | "reading"): string[] {
   const options = getOptionTexts(q.options || q.choices);
   const answer = normalizeAnswerLetter(q.correctAnswer || q.answer);
   const answerIndex = ANSWER_LETTERS.indexOf(answer);
+  const explanation = String(q.explanation || "").trim();
 
   if (!String(q.question || "").trim()) errors.push("missing question text");
   if (kind === "vocab" && !/_{3,}|\bblank\b/i.test(String(q.question || ""))) {
@@ -214,7 +215,20 @@ function validateQuestion(q: any, kind: "vocab" | "reading"): string[] {
     errors.push("options form a word-family/conjugation cluster instead of testing distinct vocabulary");
   }
   if (!options[answerIndex]) errors.push("correctAnswer does not point to an option");
-  if (!String(q.explanation || "").trim()) errors.push("missing explanation");
+  if (!explanation) errors.push("missing explanation");
+
+  // Explanations that say another option is acceptable but the keyed answer is
+  // merely stronger, better, or more suitable reveal an ambiguous item.
+  const ambiguitySignals = [
+    /(?:雖然|儘管).{0,35}(?:但|然而).{0,35}(?:更|較|不如|更能|更為)/,
+    /(?:也可以|亦可|尚可|可以成立|同樣合理|也合理|並非錯誤|不是完全錯誤)/,
+    /(?:最佳|最適合|較適合|更適合|更貼切|較貼切|更能強調|較能強調|不如.{0,20}(?:自然|貼切|適合))/,
+    /(?:could also fit|also acceptable|also possible|more appropriate|best answer|better fits)/i,
+  ];
+  if (ambiguitySignals.some(pattern => pattern.test(explanation))) {
+    errors.push("explanation admits or implies that another option could also fit");
+  }
+
   return errors;
 }
 
@@ -439,8 +453,12 @@ VOCABULARY SECTION
 - Subject-verb agreement, tense, number, articles, prepositions, collocations, and punctuation must all be correct.
 - Do not leave the intended answer in its dictionary form when the sentence requires inflection. Example: write "sounds" rather than "sound" after a singular subject in the simple present.
 - Do not use "too" to mean "also" before a main verb. Use "also" in that position, or place "too" naturally at the end of the clause.
-- Exactly one option must be semantically and grammatically possible. Avoid near-synonyms that could both fit.
+- Exactly one option must be semantically, grammatically, collocationally, and logically possible. This is an ONLY-answer item, not a best-answer item.
+- Build a semantic lock into the sentence through a definition, consequence, contrast, cause, purpose, or other context clue that excludes all three distractors.
+- Avoid broad evaluative frames such as "an ___ performance impressed everyone" when several positive adjectives could reasonably fit.
+- Never use near-synonyms or contextually defensible alternatives as distractors. If a competent teacher could defend another option, rewrite the sentence or replace that distractor.
 - The Traditional Chinese explanation must state the same meaning, direction, polarity, and comparison as the selected option. Never explain "more important" when the option says "less important," or vice versa.
+- The explanation must explain why EACH distractor is impossible in this exact sentence because of meaning, collocation, grammar, logic, or register. It must never say another option is acceptable but merely less suitable.
 - wordTested must remain the base vocabulary entry from the supplied word list.
 - The correct option may use the grammatically required inflected or derived form of wordTested, such as sound → sounds, study → studied, create → creating, or careful → carefully.
 - answerText must contain the exact option text shown to the student. Do not force the dictionary form when grammar requires a different form.
@@ -514,14 +532,16 @@ NON-NEGOTIABLE QUALITY RULES
 1. Silently solve every question before assigning correctAnswer.
 2. correctAnswer must be one bare letter: A, B, C, or D.
 3. Options must be returned in A-B-C-D order and prefixed with (A), (B), (C), and (D).
-4. Exactly one option must be correct. Reject any item with two defensible answers.
-5. Grammar must be correct after the selected option is inserted into the sentence.
-6. The explanation must agree with the option text and with the source passage. Check negation, comparison, quantity, cause/effect, and time reference.
-7. Avoid awkward textbook English, dangling modifiers, unclear pronouns, and unsupported inferences.
-8. Do not manipulate content to create a particular answer-letter pattern. The server will reposition the actual correct option after validation.
-9. For vocabulary items, keep wordTested as the source-list lemma and allow ONLY the correct option to take the grammatical inflection required by the sentence.
-10. Vocabulary distractors must be different lemmas, not conjugations or derivatives of wordTested. Never create a four-choice word-family exercise.
-11. Return JSON only.`;
+4. Exactly one option must be correct. Reject any item with two defensible answers. Do not create "best answer" items.
+5. Use a semantic lock: the sentence must contain enough context that the keyed option is uniquely required and the other three are clearly impossible.
+6. Grammar must be correct after the selected option is inserted into the sentence.
+7. The explanation must agree with the option text and with the source passage. Check negation, comparison, quantity, cause/effect, and time reference.
+8. The explanation must explicitly reject all three distractors. Never write that another option is possible, acceptable, positive, or merely less natural.
+9. Avoid awkward textbook English, dangling modifiers, unclear pronouns, unsupported inferences, and generic contexts that allow several adjectives or verbs.
+10. Do not manipulate content to create a particular answer-letter pattern. The server will reposition the actual correct option after validation.
+11. For vocabulary items, keep wordTested as the source-list lemma and allow ONLY the correct option to take the grammatical inflection required by the sentence.
+12. Vocabulary distractors must be different lemmas, not conjugations or derivatives of wordTested. Never create a four-choice word-family exercise.
+13. Return JSON only.`;
 
     const writerUserPrompt = `Generate these sections: ${activeSections.join(", ")}.
 Target GSAT level: ${selectedLevel || "mixed"}.
@@ -540,11 +560,15 @@ For every item, silently do all of the following:
 - Insert each option into the sentence and check grammar and natural usage.
 - Verify subject-verb agreement, tense, number, articles, prepositions, collocation, and word form.
 - For vocabulary items, confirm that the four options are four distinct lexical items. If several options are forms or derivatives of the same base word, rewrite the distractors using different vocabulary words from the supplied range.
-- Confirm that exactly one option is defensible.
+- Apply the adversarial alternative-fit test: insert every distractor and ask whether a fluent English teacher could reasonably defend it in the exact context.
+- Confirm that exactly one option is defensible. If any distractor is merely weaker, less natural, or less precise rather than clearly wrong, rewrite the sentence or replace the distractor.
+- Reject generic evaluative contexts that permit several adjectives, such as an athlete's ___ performance impressed everyone.
 - Independently solve the item and set correctAnswer to the truly correct option.
-- Rewrite the question or distractors when ambiguity exists.
+- Rewrite the question or distractors whenever ambiguity exists; do not preserve a flawed draft.
 - Compare the explanation against the exact option wording. Correct any reversal such as less/more, increase/decrease, can/cannot, before/after, or positive/negative.
 - For reading items, verify the answer against explicit passage evidence or a necessary inference.
+- In every vocabulary explanation, explain why the correct option is required and why each of the other three is impossible in this exact sentence.
+- Never use wording such as「雖然也可以，但……更適合」、「最佳」、「較貼切」、「更能強調」or any equivalent admission that another choice could fit.
 - Keep explanations in Traditional Chinese and all passage text in English.
 - Keep exactly 10 vocabulary questions when present, exactly one passage, and exactly four reading questions.
 Return JSON only.`;
