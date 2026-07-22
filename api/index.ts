@@ -447,7 +447,8 @@ NON-NEGOTIABLE ITEM RULES
 11. Return options in A-B-C-D order, each prefixed (A), (B), (C), (D). correctAnswer is one bare letter.
 12. The Traditional Chinese explanation must identify why the keyed answer is required and why EACH distractor is impossible in this exact context.
 13. Never say another option is possible but less suitable. Never use language such as 最佳、較貼切、更適合、雖然也可以.
-14. Do not design answer-letter patterns. The server will move the actual correct option safely after review.`;
+14. Within one ten-question vocabulary set, do not reuse any lexical item as an option when the supplied vocabulary range contains enough distinct words. Ordinary inflections count as the same lexical item for this rule (sound/sounds, study/studied).
+15. Do not design answer-letter patterns. The server will move the actual correct option safely after review.`;
 
 const VOCAB_REVIEWER_SYSTEM = `You are the final senior editor of a Taiwan GSAT vocabulary item bank.
 You receive one draft item. Repair it completely and return one corrected JSON object only.
@@ -489,6 +490,89 @@ For each question:
 - Ensure each explanation identifies the relevant passage evidence and rejects the distractors.
 Keep exactly one passage and exactly four questions. Return JSON only.`;
 
+
+function selectTargetVocabulary(vocabList: VocabularyInput[], count: number): VocabularyInput[] {
+  if (count <= 0 || vocabList.length === 0) return [];
+
+  // Sample from the entire supplied range before sending anything to the model.
+  // This prevents positional bias toward words appearing near the top of the list.
+  const selected: VocabularyInput[] = [];
+  while (selected.length < count) {
+    const round = shuffle(vocabList);
+    for (const item of round) {
+      selected.push(item);
+      if (selected.length === count) break;
+    }
+  }
+  return selected;
+}
+
+function sameLemma(a: unknown, b: unknown): boolean {
+  return String(a ?? "").trim().toLocaleLowerCase() === String(b ?? "").trim().toLocaleLowerCase();
+}
+
+/**
+ * Produces a conservative comparison key for suite-wide option reuse checks.
+ * It treats ordinary inflections as the same lexical item where practical
+ * (for example, sound/sounds and study/studied).
+ */
+function optionLexemeKey(value: unknown): string {
+  let token = stripOptionLabel(value)
+    .toLowerCase()
+    .replace(/[’']/g, "")
+    .replace(/[^a-z\s-]/g, " ")
+    .trim()
+    .split(/\s+/)[0] || "";
+
+  if (token.length <= 3) return token;
+  if (token.endsWith("ies") && token.length > 4) token = `${token.slice(0, -3)}y`;
+  else if (token.endsWith("ied") && token.length > 4) token = `${token.slice(0, -3)}y`;
+  else if (token.endsWith("ing") && token.length > 5) {
+    token = token.slice(0, -3);
+    if (/(.)\1$/.test(token)) token = token.slice(0, -1);
+    if (!token.endsWith("e") && token.length > 3) {
+      // Keep the conservative stem. The AI prompt remains the primary lexical guard.
+    }
+  } else if (token.endsWith("ed") && token.length > 4) {
+    token = token.slice(0, -2);
+    if (/(.)\1$/.test(token)) token = token.slice(0, -1);
+  } else if (token.endsWith("es") && token.length > 4) token = token.slice(0, -2);
+  else if (token.endsWith("s") && !token.endsWith("ss") && token.length > 3) token = token.slice(0, -1);
+
+  return token;
+}
+
+function usedOptionKeys(questions: ExamQuestion[]): Set<string> {
+  return new Set(
+    questions
+      .flatMap((question) => question.options.map(optionLexemeKey))
+      .filter(Boolean),
+  );
+}
+
+function suiteDuplicateOptions(questions: ExamQuestion[]): string[] {
+  const seen = new Map<string, string>();
+  const duplicates: string[] = [];
+
+  questions.forEach((question, qIndex) => {
+    question.options.forEach((option) => {
+      const text = stripOptionLabel(option);
+      const key = optionLexemeKey(text);
+      if (!key) return;
+      const previous = seen.get(key);
+      if (previous) duplicates.push(`Q${qIndex + 1} option "${text}" repeats ${previous}`);
+      else seen.set(key, `an earlier option (${text})`);
+    });
+  });
+
+  return duplicates;
+}
+
+function formatForbiddenOptions(questions: ExamQuestion[]): string {
+  const items = questions.flatMap((question) => question.options.map(stripOptionLabel));
+  return items.length ? items.map((item) => `- ${item}`).join("\n") : "(none)";
+}
+
 function formatVocabularyList(vocabList: VocabularyInput[]): string {
   if (!vocabList.length) return "Use standard GSAT Level 3-6 vocabulary.";
   return vocabList
@@ -504,17 +588,29 @@ function formatVocabularyList(vocabList: VocabularyInput[]): string {
 // -----------------------------------------------------------------------------
 
 async function generateVocabularyDraft(
+  targetWords: VocabularyInput[],
   vocabList: VocabularyInput[],
   selectedLevel: number | string,
 ): Promise<ExamQuestion[]> {
-  const userPrompt = `Create exactly 10 GSAT vocabulary questions for Level ${selectedLevel || "mixed"}.
-Use the supplied list as the tested vocabulary range. Across the set, use different target words where possible.
-Distractors should preferably come from the same supplied range, but each option set must contain four distinct lexical items.
+  const targetAssignments = targetWords
+    .map((item, index) => `${index + 1}. Question ${index + 1} MUST test: ${item.word}${item.pos ? ` (${item.pos})` : ""}${item.meaning ? ` — ${item.meaning}` : ""}`)
+    .join("\n");
 
-VOCABULARY LIST
+  const userPrompt = `Create exactly ${targetWords.length} GSAT vocabulary questions for Level ${selectedLevel || "mixed"}.
+The target words below were sampled randomly by the server from the ENTIRE supplied range.
+Follow the assignment exactly: Question N must test the target listed for Question N.
+Do not replace a target with an earlier or easier word from the list.
+The displayed correct option may use a grammatically necessary inflection, but wordTested must remain the assigned dictionary entry.
+Distractors should preferably come from the full supplied range, and every option set must contain four distinct lexical items.
+SUITE-WIDE UNIQUENESS: across all ${targetWords.length} questions, do not reuse an option word or the same lexeme in another inflected form when the supplied list has enough distinct vocabulary. For example, if "sound" or "sounds" appears anywhere, neither may appear again in this set.
+
+MANDATORY TARGET ASSIGNMENTS
+${targetAssignments}
+
+FULL VOCABULARY RANGE FOR DISTRACTORS
 ${formatVocabularyList(vocabList)}
 
-Return {"vocabQuestions":[...]} with exactly 10 items.`;
+Return {"vocabQuestions":[...]} with exactly ${targetWords.length} items in the same order as the assignments.`;
 
   const raw = await callJsonModel<any>(
     VOCAB_WRITER_SYSTEM,
@@ -524,19 +620,27 @@ Return {"vocabQuestions":[...]} with exactly 10 items.`;
   );
 
   const items = Array.isArray(raw?.vocabQuestions) ? raw.vocabQuestions : [];
-  return items.slice(0, 10).map((item: any) => normalizeQuestion(item, "vocab"));
+  return items.slice(0, targetWords.length).map((item: any) => normalizeQuestion(item, "vocab"));
 }
 
 async function generateOneVocabularyQuestion(
+  targetWord: VocabularyInput,
   vocabList: VocabularyInput[],
   selectedLevel: number | string,
   avoidQuestions: string[],
+  forbiddenOptions: ExamQuestion[] = [],
 ): Promise<ExamQuestion> {
   const prompt = `Create ONE new Level ${selectedLevel || "mixed"} GSAT vocabulary question.
+The required target is ${targetWord.word}${targetWord.pos ? ` (${targetWord.pos})` : ""}${targetWord.meaning ? ` — ${targetWord.meaning}` : ""}.
+You MUST test this exact dictionary entry. wordTested must be "${targetWord.word}".
+The displayed correct option may be inflected only when the sentence requires it.
 Do not duplicate these existing stems:
 ${avoidQuestions.map((q) => `- ${q}`).join("\n") || "(none)"}
 
-VOCABULARY LIST
+Do not reuse any of these option words or their ordinary inflected forms:
+${formatForbiddenOptions(forbiddenOptions)}
+
+FULL VOCABULARY RANGE FOR DISTRACTORS
 ${formatVocabularyList(vocabList)}
 
 Return one question object, not an array.`;
@@ -547,11 +651,20 @@ Return one question object, not an array.`;
 async function repairVocabularyQuestion(
   question: ExamQuestion,
   errors: string[],
+  targetWord: VocabularyInput,
   vocabList: VocabularyInput[],
   selectedLevel: number | string,
+  forbiddenOptions: ExamQuestion[] = [],
 ): Promise<ExamQuestion> {
   const prompt = `Repair this Level ${selectedLevel || "mixed"} item.
+The REQUIRED target dictionary entry is "${targetWord.word}"${targetWord.pos ? ` (${targetWord.pos})` : ""}${targetWord.meaning ? ` — ${targetWord.meaning}` : ""}.
+Do not substitute a different target. Set wordTested exactly to "${targetWord.word}".
+The displayed keyed option may use a necessary grammatical form of that target.
 Detected deterministic problems: ${errors.join("; ") || "none; perform full semantic audit anyway"}.
+
+SUITE-WIDE OPTION EXCLUSIONS
+Do not use any of the following option words, nor ordinary inflected forms of the same lexemes:
+${formatForbiddenOptions(forbiddenOptions)}
 
 SOURCE VOCABULARY RANGE
 ${formatVocabularyList(vocabList)}
@@ -574,25 +687,35 @@ async function buildVocabularySection(
   vocabList: VocabularyInput[],
   selectedLevel: number | string,
 ): Promise<ExamQuestion[]> {
+  const targetWords = selectTargetVocabulary(vocabList, 10);
+  const uniqueVocabularyCount = new Set(vocabList.map((item) => item.word.trim().toLowerCase()).filter(Boolean)).size;
+  const enforceSuiteWideOptionUniqueness = uniqueVocabularyCount >= targetWords.length * 4;
+  if (targetWords.length === 0) {
+    throw new Error("No vocabulary words are available for question generation.");
+  }
+
   let questions: ExamQuestion[] = [];
   let lastError: unknown = null;
 
-  for (let batchAttempt = 0; batchAttempt < 3 && questions.length < 10; batchAttempt++) {
+  for (let batchAttempt = 0; batchAttempt < 3 && questions.length < targetWords.length; batchAttempt++) {
     try {
-      questions = await generateVocabularyDraft(vocabList, selectedLevel);
+      questions = await generateVocabularyDraft(targetWords, vocabList, selectedLevel);
     } catch (error) {
       lastError = error;
       console.warn(`Vocabulary batch attempt ${batchAttempt + 1} failed:`, error);
     }
   }
 
-  while (questions.length < 10) {
+  while (questions.length < targetWords.length) {
+    const targetWord = targetWords[questions.length];
     try {
       questions.push(
         await generateOneVocabularyQuestion(
+          targetWord,
           vocabList,
           selectedLevel,
           questions.map((q) => q.question),
+          enforceSuiteWideOptionUniqueness ? questions : [],
         ),
       );
     } catch (error) {
@@ -602,28 +725,48 @@ async function buildVocabularySection(
     }
   }
 
-  if (questions.length !== 10) {
-    throw lastError || new Error(`Unable to generate 10 vocabulary questions; received ${questions.length}.`);
+  if (questions.length !== targetWords.length) {
+    throw lastError || new Error(`Unable to generate ${targetWords.length} vocabulary questions; received ${questions.length}.`);
   }
 
   const reviewed: ExamQuestion[] = [];
 
   for (let index = 0; index < questions.length; index++) {
+    const targetWord = targetWords[index];
     let current = questions[index];
     let errors = validateQuestion(current, "vocab");
+    if (!sameLemma(current.wordTested, targetWord.word)) {
+      errors.push(`wordTested must be the assigned target "${targetWord.word}"`);
+    }
+    if (enforceSuiteWideOptionUniqueness) {
+      const priorKeys = usedOptionKeys(reviewed);
+      const conflicts = current.options
+        .map(stripOptionLabel)
+        .filter((option) => priorKeys.has(optionLexemeKey(option)));
+      if (conflicts.length) errors.push(`suite-wide repeated options: ${conflicts.join(", ")}`);
+    }
 
-    // Every item receives at least one independent semantic review, even when
-    // deterministic checks find no issue. This catches ambiguity such as
-    // intense/remarkable performance that code alone cannot reliably detect.
     for (let repairAttempt = 0; repairAttempt < 3; repairAttempt++) {
       try {
         current = await repairVocabularyQuestion(
           current,
           errors,
+          targetWord,
           vocabList,
           selectedLevel,
+          enforceSuiteWideOptionUniqueness ? reviewed : [],
         );
         errors = validateQuestion(current, "vocab");
+        if (!sameLemma(current.wordTested, targetWord.word)) {
+          errors.push(`wordTested must be the assigned target "${targetWord.word}"`);
+        }
+        if (enforceSuiteWideOptionUniqueness) {
+          const priorKeys = usedOptionKeys(reviewed);
+          const conflicts = current.options
+            .map(stripOptionLabel)
+            .filter((option) => priorKeys.has(optionLexemeKey(option)));
+          if (conflicts.length) errors.push(`suite-wide repeated options: ${conflicts.join(", ")}`);
+        }
         if (errors.length === 0) break;
       } catch (error) {
         lastError = error;
@@ -632,22 +775,40 @@ async function buildVocabularySection(
     }
 
     if (errors.length > 0) {
-      // Replace only this item instead of failing the entire paper.
       let replacement: ExamQuestion | null = null;
       for (let replacementAttempt = 0; replacementAttempt < 3; replacementAttempt++) {
         try {
           const fresh = await generateOneVocabularyQuestion(
+            targetWord,
             vocabList,
             selectedLevel,
             reviewed.map((q) => q.question),
+            enforceSuiteWideOptionUniqueness ? reviewed : [],
           );
+          const freshErrors = validateQuestion(fresh, "vocab");
+          if (!sameLemma(fresh.wordTested, targetWord.word)) {
+            freshErrors.push(`wordTested must be the assigned target "${targetWord.word}"`);
+          }
           const repaired = await repairVocabularyQuestion(
             fresh,
-            validateQuestion(fresh, "vocab"),
+            freshErrors,
+            targetWord,
             vocabList,
             selectedLevel,
+            enforceSuiteWideOptionUniqueness ? reviewed : [],
           );
-          if (validateQuestion(repaired, "vocab").length === 0) {
+          const repairedErrors = validateQuestion(repaired, "vocab");
+          if (!sameLemma(repaired.wordTested, targetWord.word)) {
+            repairedErrors.push(`wordTested must be the assigned target "${targetWord.word}"`);
+          }
+          if (enforceSuiteWideOptionUniqueness) {
+            const priorKeys = usedOptionKeys(reviewed);
+            const conflicts = repaired.options
+              .map(stripOptionLabel)
+              .filter((option) => priorKeys.has(optionLexemeKey(option)));
+            if (conflicts.length) repairedErrors.push(`suite-wide repeated options: ${conflicts.join(", ")}`);
+          }
+          if (repairedErrors.length === 0) {
             replacement = repaired;
             break;
           }
@@ -665,8 +826,18 @@ async function buildVocabularySection(
   }
 
   const balanced = balanceQuestions(reviewed);
+  if (enforceSuiteWideOptionUniqueness) {
+    const duplicates = suiteDuplicateOptions(balanced);
+    if (duplicates.length) {
+      throw new Error(`Vocabulary suite contains repeated option lexemes: ${duplicates.join("; ")}`);
+    }
+  }
+
   balanced.forEach((question, index) => {
     const errors = validateQuestion(question, "vocab");
+    if (!sameLemma(question.wordTested, targetWords[index].word)) {
+      errors.push(`wordTested no longer matches assigned target "${targetWords[index].word}"`);
+    }
     if (errors.length) {
       throw new Error(`Vocabulary Q${index + 1} failed final QA: ${errors.join("; ")}`);
     }
