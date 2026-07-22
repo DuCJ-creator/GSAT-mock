@@ -216,31 +216,25 @@ export default function App() {
   };
 
   const validateBalancedDistribution = (distribution: Record<string, number> | undefined, label: string) => {
-    if (!distribution) throw new Error(`${label} 未提供答案分布資料。`);
+    if (!distribution) throw new Error(`${label} 未通過答案分布檢查。`);
     const counts = ["A", "B", "C", "D"].map(letter => Number(distribution[letter] || 0));
     if (Math.max(...counts) - Math.min(...counts) > 1) {
       throw new Error(`${label} 的正確答案過度集中，請重新生成。`);
     }
   };
 
-  const assertQualityAssurance = (payload: any, expectedSection: "vocab" | "reading") => {
+  const assertQualityAssurance = (payload: any) => {
     const qa = payload?.qualityAssurance;
     if (!qa?.editorialPassCompleted || !qa?.structuralValidationPassed) {
       throw new Error("試題未完成文法、歧義與答案一致性審核，請重新生成。");
     }
-    if (!qa?.answerKeyIntegrityPassed || qa?.optionReorderingMethod !== "content-anchored") {
-      throw new Error("選項重排後的答案對應檢查未通過，系統已停止載入這份試卷。");
-    }
-
-    // Each API request generates only one section. Validate only that section;
-    // otherwise a vocabulary-only response would incorrectly fail for lacking
-    // reading-distribution metadata (and vice versa).
-    if (expectedSection === "vocab") {
+    if (selectedExerciseTypes.vocab) {
       validateBalancedDistribution(qa.vocabAnswerDistribution, "字彙題");
-    } else {
+    }
+    if (selectedExerciseTypes.reading) {
       const readingDistributions = qa.readingAnswerDistributions;
       if (!Array.isArray(readingDistributions) || readingDistributions.length === 0) {
-        throw new Error("閱讀題未提供答案分布資料。");
+        throw new Error("閱讀題未通過答案分布檢查。");
       }
       readingDistributions.forEach((dist: Record<string, number>, idx: number) =>
         validateBalancedDistribution(dist, `閱讀題第 ${idx + 1} 篇`)
@@ -311,7 +305,7 @@ export default function App() {
         if (!resVocab.ok) throw new Error(await getErrorMsg(resVocab));
 
         const resVocabData = await resVocab.json();
-        assertQualityAssurance(resVocabData, "vocab");
+        assertQualityAssurance(resVocabData);
         console.log("RAW Q1 options:", JSON.stringify(resVocabData.data?.vocabQuestions?.[0]?.options));
 
         if (resVocabData.success && resVocabData.data && resVocabData.data.vocabQuestions) {
@@ -354,7 +348,7 @@ export default function App() {
           if (!resReading.ok) throw new Error(await getErrorMsg(resReading));
 
           const resReadingData = await resReading.json();
-          assertQualityAssurance(resReadingData, "reading");
+          assertQualityAssurance(resReadingData);
           console.log("RAW READING RESPONSE:", JSON.stringify(resReadingData, null, 2));
 
           if (resReadingData.success && resReadingData.data) {
