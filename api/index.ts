@@ -42,53 +42,6 @@ function verifyApiKeys() {
   }
 }
 
-// Fisher-Yates shuffle
-function shuffleArray<T>(arr: T[]): T[] {
-  const a = [...arr];
-  for (let i = a.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [a[i], a[j]] = [a[j], a[i]];
-  }
-  return a;
-}
-
-// Generate a random balanced sequence of n answers from letters pool
-// Ensures no letter appears more than ceil(n/4)+1 times and no 3 consecutive same letters
-function generateBalancedSequence(n: number): string[] {
-  const letters = ["A", "B", "C", "D"];
-  const base = Math.floor(n / 4);
-  const remainder = n % 4;
-
-  // Build pool: each letter appears base times, remainder letters get one extra
-  const extraLetters = shuffleArray([...letters]).slice(0, remainder);
-  let pool: string[] = [];
-  for (const l of letters) {
-    const count = base + (extraLetters.includes(l) ? 1 : 0);
-    for (let i = 0; i < count; i++) pool.push(l);
-  }
-  pool = shuffleArray(pool);
-
-  // Fix any 3+ consecutive same letters by swapping
-  for (let i = 2; i < pool.length; i++) {
-    if (pool[i] === pool[i - 1] && pool[i] === pool[i - 2]) {
-      // Find a different letter to swap with
-      for (let j = i + 1; j < pool.length; j++) {
-        if (pool[j] !== pool[i]) {
-          [pool[i], pool[j]] = [pool[j], pool[i]];
-          break;
-        }
-      }
-    }
-  }
-
-  return pool;
-}
-
-// Normalize answer to bare letter
-function normalizeAnswerLetter(ans: any): string {
-  return String(ans || "A").replace(/[()]/g, "").trim().toUpperCase();
-}
-
 // Normalize options to ["(A) text", "(B) text", ...]
 function normalizeOptionsArray(opts: any): string[] {
   const letters = ["A", "B", "C", "D"];
@@ -127,61 +80,9 @@ function normalizeOptionsArray(opts: any): string[] {
   });
 }
 
-// Move correct option to targetLetter position by swapping option texts
-function moveCorrectToTarget(
-  options: string[],
-  currentCorrect: string,
-  targetLetter: string
-): { options: string[]; correctAnswer: string } {
-  const letters = ["A", "B", "C", "D"];
-  const currentIdx = letters.indexOf(currentCorrect);
-  const targetIdx = letters.indexOf(targetLetter);
-
-  if (currentIdx === -1 || targetIdx === -1 || currentIdx === targetIdx) {
-    return { options, correctAnswer: currentCorrect };
-  }
-
-  // Extract bare text from each option (strip "(A) " prefix)
-  const texts = options.map(o => o.replace(/^\([A-D]\)\s*/, "").trim());
-
-  // Swap texts at the two positions
-  const temp = texts[currentIdx];
-  texts[currentIdx] = texts[targetIdx];
-  texts[targetIdx] = temp;
-
-  // Re-apply letter prefixes
-  const newOptions = texts.map((text, idx) => `(${letters[idx]}) ${text}`);
-
-  return { options: newOptions, correctAnswer: targetLetter };
-}
-
-// Enforce balanced, randomized answer distribution for vocab (10 questions)
-function enforceVocabDistribution(questions: any[]): any[] {
-  if (!questions || questions.length === 0) return questions;
-  const targetSequence = generateBalancedSequence(questions.length);
-
-  return questions.map((q: any, idx: number) => {
-    const targetLetter = targetSequence[idx];
-    const currentCorrect = normalizeAnswerLetter(q.correctAnswer || q.answer);
-    const normalizedOpts = normalizeOptionsArray(q.options || q.choices);
-    const { options, correctAnswer } = moveCorrectToTarget(normalizedOpts, currentCorrect, targetLetter);
-    return { ...q, options, correctAnswer };
-  });
-}
-
-// Enforce balanced, randomized answer distribution for reading (4 questions per passage)
-function enforceReadingDistribution(questions: any[]): any[] {
-  if (!questions || questions.length === 0) return questions;
-  // For 4 questions: use all 4 letters exactly once, shuffled randomly
-  const targetSequence = shuffleArray(["A", "B", "C", "D"]);
-
-  return questions.map((q: any, idx: number) => {
-    const targetLetter = targetSequence[idx];
-    const currentCorrect = normalizeAnswerLetter(q.correctAnswer || q.answer);
-    const normalizedOpts = normalizeOptionsArray(q.options || q.choices);
-    const { options, correctAnswer } = moveCorrectToTarget(normalizedOpts, currentCorrect, targetLetter);
-    return { ...q, options, correctAnswer };
-  });
+// Normalize answer to bare letter: "(A)" -> "A"
+function normalizeAnswerLetter(ans: any): string {
+  return String(ans || "A").replace(/[()]/g, "").trim().toUpperCase();
 }
 
 app.get("/api/health", async (req, res) => {
@@ -223,11 +124,12 @@ app.post("/api/generate", async (req, res) => {
       activeSections.push("vocabQuestions");
       sectionsGuidelines += `
 1. "vocabQuestions": Create EXACTLY 10 GSAT-level English vocabulary multiple-choice questions.
-   - Ensure the structure and complexity are aligned with Taiwan's GSAT (General Scholastic Ability Test).
+   - Ensure complexity is aligned with Taiwan's GSAT (General Scholastic Ability Test).
    - For EACH question, provide exactly four choices prefixed with (A), (B), (C), (D).
-   - Distractors must not repeat within a question and should be high-frequency academic vocabulary.
+   - The correctAnswer must be the letter (A, B, C, or D) of the option that actually answers the question correctly.
+   - Distractors must not repeat within a question and should be plausible academic vocabulary.
    - Provide a precise Traditional Chinese explanation containing translation and grammar notes.
-   - The correctAnswer field must be a single bare letter: A, B, C, or D matching one of the four options.
+   - The explanation must reference the correct word and explain why it fits the sentence.
 `;
     }
 
@@ -236,40 +138,40 @@ app.post("/api/generate", async (req, res) => {
       sectionsGuidelines += `
 2. "readingPassages": Create EXACTLY ONE reading comprehension passage for the level: ${selectedReadingLevels.join(", ")}.
    - CRITICAL: The passage text MUST be written in English only. Do NOT write passages in Chinese.
-   - Create ONLY 1 passage total. Do NOT create multiple passages.
-   - The single passage MUST be 200-250 words.
-   - It MUST be followed by EXACTLY 4 questions.
-   - The questions should test global reading skills (main idea, detail lookup, tone analysis, context-clue inferring).
+   - Create ONLY 1 passage. Do NOT create multiple passages.
+   - The passage MUST be 200-250 words.
+   - It MUST be followed by EXACTLY 4 comprehension questions.
+   - The questions should test: main idea, detail lookup, tone/attitude, and vocabulary-in-context.
    - Provide 4 options for each question, each prefixed with (A), (B), (C), (D).
-   - The correctAnswer field must be a single bare letter: A, B, C, or D matching one of the four options.
-   - Provide complete Traditional Chinese explanations.
+   - The correctAnswer must be the letter of the option that actually answers the question correctly based on the passage.
+   - Provide Traditional Chinese explanations explaining why the correct answer is right.
 `;
     }
 
     const systemPrompt = `You are Tr. Shirley Du, an elite high school English educator in Taiwan specializing in GSAT (English exam) preparation.
 Your tone is encouraging, academically precise, and deeply knowledgeable about Taiwan's testing patterns.
-You will generate high-quality interactive exercises based on the vocabulary words provided.
-Ensure that:
-1. Every generated question and option is 100% grammatically and contextually correct.
-   - For vocabulary questions, ensure the blank can only be filled by the correct option.
-   - NEVER use "cost" with a person as the subject to mean spending money.
-   - NEVER use "spend" with an item as the subject.
-   - Ensure correct preposition pairings and grammatical structures.
-2. Every generated question has no ambiguity. There is exactly one correct answer.
-3. The vocabulary level fits the Taiwan GSAT syllabus (levels 3 to 6).
-4. The explanations are written in elegant Traditional Chinese following the Taiwanese teaching style.
-5. ALL passage text must be in English only. Never write passages in Chinese.
-6. The correctAnswer field must always be a single bare letter with no parentheses: A, B, C, or D.`;
+Generate high-quality exam exercises based on the vocabulary words provided.
+
+CRITICAL RULES:
+1. Every question must be 100% grammatically and contextually correct.
+2. For vocabulary questions, the blank can ONLY be correctly filled by the correct option — the other three options must be clearly wrong in context.
+3. The correctAnswer field must be the letter (A, B, C, or D) of the option that is ACTUALLY correct for that question. Never assign a wrong letter.
+4. The explanation must match the correctAnswer — it should explain why that specific letter/word is correct.
+5. NEVER use "cost" with a person as subject. NEVER use "spend" with an item as subject.
+6. Vocabulary level must fit Taiwan GSAT syllabus (levels 3-6).
+7. Explanations must be in Traditional Chinese (繁體中文).
+8. ALL passage text must be in English only.
+9. correctAnswer must be a single bare letter with no parentheses: A, B, C, or D.`;
 
     const instructionsPrompt = `Please generate the requested GSAT exam exercises based on the following input vocabulary:
 ${vocabString}
 
 Active Sections to generate: ${activeSections.join(", ")}.
 
-Guidelines for sections to generate:
+Guidelines:
 ${sectionsGuidelines}
 
-You MUST follow the specified JSON schema strictly. Make sure all strings are correctly closed and the response is clean JSON. Keep explanations concise to ensure fast API responses and prevent serverless timeouts.`;
+Return clean valid JSON following the schema exactly. Keep explanations concise.`;
 
     const responseSchema: any = { type: Type.OBJECT, properties: {}, required: [] };
 
@@ -280,15 +182,15 @@ You MUST follow the specified JSON schema strictly. Make sure all strings are co
           type: Type.OBJECT,
           properties: {
             id: { type: Type.STRING },
-            question: { type: Type.STRING, description: "Sentence with blank '__________'. GSAT-level complexity." },
+            question: { type: Type.STRING, description: "Sentence with blank '__________'." },
             options: {
               type: Type.ARRAY,
               items: { type: Type.STRING },
               description: "Exactly 4 options, each prefixed with (A), (B), (C), (D)."
             },
-            correctAnswer: { type: Type.STRING, description: "Single bare letter: A, B, C, or D" },
-            wordTested: { type: Type.STRING, description: "The target word tested" },
-            explanation: { type: Type.STRING, description: "Detailed Traditional Chinese explanation." }
+            correctAnswer: { type: Type.STRING, description: "The letter (A, B, C, or D) of the actually correct option." },
+            wordTested: { type: Type.STRING, description: "The correct answer word." },
+            explanation: { type: Type.STRING, description: "Traditional Chinese explanation of why the correct answer is right." }
           },
           required: ["id", "question", "options", "correctAnswer", "wordTested", "explanation"]
         }
@@ -302,24 +204,23 @@ You MUST follow the specified JSON schema strictly. Make sure all strings are co
         items: {
           type: Type.OBJECT,
           properties: {
-            level: { type: Type.STRING, description: "Must be one of: basic, essential, advanced" },
-            title: { type: Type.STRING, description: "Title of the passage in English" },
-            passage: { type: Type.STRING, description: "English passage ~200-250 words. MUST be in English only." },
+            level: { type: Type.STRING, description: "One of: basic, essential, advanced" },
+            title: { type: Type.STRING, description: "English title of the passage." },
+            passage: { type: Type.STRING, description: "English passage, 200-250 words." },
             questions: {
               type: Type.ARRAY,
-              description: "Exactly 4 reading comprehension questions",
               items: {
                 type: Type.OBJECT,
                 properties: {
                   id: { type: Type.STRING },
-                  question: { type: Type.STRING, description: "GSAT-level comprehension question in English" },
+                  question: { type: Type.STRING },
                   options: {
                     type: Type.ARRAY,
                     items: { type: Type.STRING },
-                    description: "Exactly 4 options each prefixed with (A), (B), (C), (D)."
+                    description: "4 options each prefixed with (A), (B), (C), (D)."
                   },
-                  correctAnswer: { type: Type.STRING, description: "Single bare letter: A, B, C, or D" },
-                  explanation: { type: Type.STRING, description: "Traditional Chinese detailed analysis." }
+                  correctAnswer: { type: Type.STRING, description: "The letter (A, B, C, or D) of the actually correct option." },
+                  explanation: { type: Type.STRING, description: "Traditional Chinese explanation." }
                 },
                 required: ["id", "question", "options", "correctAnswer", "explanation"]
               }
@@ -339,7 +240,7 @@ You MUST follow the specified JSON schema strictly. Make sure all strings are co
         model,
         messages: [
           { role: "system", content: systemPrompt },
-          { role: "user", content: instructionsPrompt + "\n\nCRITICAL: Return a single valid JSON object. All passage and question text must be in English. correctAnswer must be a single bare letter A, B, C, or D with no parentheses." }
+          { role: "user", content: instructionsPrompt + "\n\nIMPORTANT: The correctAnswer must match the option that is actually correct for the question. Double-check every correctAnswer before outputting." }
         ],
         response_format: { type: "json_object" },
         temperature: 0.7,
@@ -353,7 +254,7 @@ You MUST follow the specified JSON schema strictly. Make sure all strings are co
         config: {
           systemInstruction: systemPrompt,
           responseMimeType: "application/json",
-          responseSchema: responseSchema,
+          responseSchema,
           temperature: 0.7,
         },
       });
@@ -364,25 +265,35 @@ You MUST follow the specified JSON schema strictly. Make sure all strings are co
 
     const examData = JSON.parse(outputText);
 
-    // Post-process: enforce randomized but balanced answer distribution
-    // by physically swapping option texts so correct option matches target letter
+    // Only normalize format — do NOT change correctAnswer or swap options
     if (examData.vocabQuestions) {
-      examData.vocabQuestions = enforceVocabDistribution(examData.vocabQuestions);
+      examData.vocabQuestions = examData.vocabQuestions.map((q: any, idx: number) => ({
+        ...q,
+        id: `vocab-${idx}-${Date.now()}`,
+        options: normalizeOptionsArray(q.options || q.choices),
+        correctAnswer: normalizeAnswerLetter(q.correctAnswer || q.answer)
+      }));
     }
 
     if (examData.readingPassages || examData.readingPassage) {
       let passages = examData.readingPassages || examData.readingPassage;
       if (!Array.isArray(passages)) passages = [passages];
-      examData.readingPassages = passages.map((p: any) => ({
+      const ts = Date.now();
+      examData.readingPassages = passages.map((p: any, pIdx: number) => ({
         ...p,
-        questions: enforceReadingDistribution(p.questions || [])
+        questions: (p.questions || []).map((q: any, qIdx: number) => ({
+          ...q,
+          id: `reading-${pIdx}-${qIdx}-${ts}`,
+          options: normalizeOptionsArray(q.options || q.choices),
+          correctAnswer: normalizeAnswerLetter(q.correctAnswer || q.answer)
+        }))
       }));
     }
 
     res.json({ success: true, data: examData });
   } catch (error: any) {
     console.error("GSAT Buffet Generation Error:", error);
-    res.status(500).json({ success: false, error: error.message || "An unexpected error occurred during exam generation." });
+    res.status(500).json({ success: false, error: error.message || "An unexpected error occurred." });
   }
 });
 
@@ -404,11 +315,11 @@ The user's exam performance:
 
 Provide:
 1. "greeting": A warm greeting addressing the student's status.
-2. "analysis": A highly professional yet heartening section review of what they did well and where their blindspots are.
-3. "tips": 3 actionable, highly tactical GSAT English study tips tailored to their score.
-4. "encouragement": A powerful, inspirational closing quote/sentence designed to boost their spirits!
+2. "analysis": A professional yet heartening review of strengths and blindspots.
+3. "tips": 3 actionable GSAT English study tips tailored to their score.
+4. "encouragement": An inspirational closing sentence.
 
-Return structured JSON with exactly these fields: greeting, analysis, tips (array of 3 strings), encouragement.`;
+Return JSON with exactly: greeting, analysis, tips (array of 3 strings), encouragement.`;
 
     let outputText = "";
     if (process.env.OPENAI_API_KEY) {
@@ -418,7 +329,7 @@ Return structured JSON with exactly these fields: greeting, analysis, tips (arra
         model,
         messages: [
           { role: "system", content: systemPrompt },
-          { role: "user", content: userPrompt + "\n\nCRITICAL: Return a single valid JSON object with exactly 'greeting', 'analysis', 'tips' (array of 3 strings), and 'encouragement'." }
+          { role: "user", content: userPrompt }
         ],
         response_format: { type: "json_object" },
         temperature: 0.8,
@@ -453,7 +364,7 @@ Return structured JSON with exactly these fields: greeting, analysis, tips (arra
     res.json({ success: true, data: reportData });
   } catch (error: any) {
     console.error("GSAT Evaluation Report Error:", error);
-    res.status(500).json({ success: false, error: error.message || "An unexpected error occurred during progress evaluation." });
+    res.status(500).json({ success: false, error: error.message || "An unexpected error occurred." });
   }
 });
 
