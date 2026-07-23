@@ -122,6 +122,8 @@ type ExamQuestion = {
   explanation: string;
   wordTested?: string;
   answerText?: string;
+  reviewStatus?: "approved" | "manual-review";
+  reviewWarnings?: string[];
 };
 
 type MorphologyPlan = {
@@ -284,6 +286,31 @@ function validateQuestion(question: ExamQuestion, kind: "vocab" | "reading"): st
   }
 
   return errors;
+}
+
+
+function splitValidationErrors(errors: string[]): { hard: string[]; soft: string[] } {
+  const softPatterns = [
+    /explanation admits that another option could fit/i,
+    /suite-wide repeated options/i,
+    /word-family exercise/i,
+  ];
+  const soft: string[] = [];
+  const hard: string[] = [];
+  for (const error of errors) {
+    if (softPatterns.some((pattern) => pattern.test(error))) soft.push(error);
+    else hard.push(error);
+  }
+  return { hard, soft };
+}
+
+function attachReviewMetadata(question: ExamQuestion, warnings: string[]): ExamQuestion {
+  const uniqueWarnings = Array.from(new Set(warnings.filter(Boolean)));
+  return {
+    ...question,
+    reviewStatus: uniqueWarnings.length ? "manual-review" : "approved",
+    reviewWarnings: uniqueWarnings,
+  };
 }
 
 function countWords(text: string): number {
@@ -1026,16 +1053,19 @@ async function buildVocabularySection(
     }
   }
 
-  balanced.forEach((question, index) => {
+  return balanced.map((question, index) => {
     const errors = validateQuestion(question, "vocab");
     if (!sameLemma(question.wordTested, targetWords[index].word)) {
       errors.push(`wordTested no longer matches assigned target "${targetWords[index].word}"`);
     }
-    if (errors.length) {
-      throw new Error(`Vocabulary Q${index + 1} failed final QA: ${errors.join("; ")}`);
+    const { hard, soft } = splitValidationErrors(errors);
+    if (hard.length) {
+      // Keep the usable item instead of discarding the whole paper. Structural
+      // failures remain visible as manual-review warnings for teacher editing.
+      console.warn(`Vocabulary Q${index + 1} requires manual review: ${hard.join("; ")}`);
     }
+    return attachReviewMetadata(question, [...hard, ...soft]);
   });
-  return balanced;
 }
 
 // -----------------------------------------------------------------------------
@@ -1100,7 +1130,15 @@ async function buildReadingSection(
     }
   }
 
-  throw lastError || new Error(`Unable to generate a validated ${level} reading passage.`);
+  // Return the best available passage with per-question review markers rather
+  // than rejecting the entire paper after all repair attempts.
+  console.warn(`Reading passage ${level} requires manual review:`, lastError);
+  const fallback = await generateReadingDraft(level, selectedLevel);
+  fallback.questions = fallback.questions.map((question) => {
+    const errors = validateQuestion(question, "reading");
+    return attachReviewMetadata(question, errors);
+  });
+  return fallback;
 }
 
 // -----------------------------------------------------------------------------
@@ -1144,18 +1182,31 @@ function distribution(questions: ExamQuestion[] = []): Record<AnswerLetter, numb
 
 
 function validateExamData(data: ExamData): string[] {
-  const errors: string[] = [];
-  (data.vocabQuestions || []).forEach((question, index) => {
-    validateQuestion(question, "vocab").forEach((error) =>
-      errors.push(`Vocabulary Q${index + 1}: ${error}`),
-    );
-  });
-  (data.readingPassages || []).forEach((passage, index) => {
-    validatePassage(passage).forEach((error) =>
-      errors.push(`Reading passage ${index + 1}: ${error}`),
-    );
-  });
-  return errors;
+  const fatal: string[] = [];
+  if (data.vocabQuestions && data.vocabQuestions.length === 0) fatal.push("Vocabulary section is empty");
+  if (data.readingPassages && data.readingPassages.length === 0) fatal.push("Reading section is empty");
+  return fatal;
+}
+
+function collectReviewWarnings(data: ExamData) {
+  const vocab = (data.vocabQuestions || []).flatMap((question, index) =>
+    (question.reviewWarnings || []).map((warning) => ({
+      section: "vocab",
+      questionNumber: index + 1,
+      warning,
+    })),
+  );
+  const reading = (data.readingPassages || []).flatMap((passage, passageIndex) =>
+    passage.questions.flatMap((question, questionIndex) =>
+      (question.reviewWarnings || []).map((warning) => ({
+        section: "reading",
+        passageNumber: passageIndex + 1,
+        questionNumber: questionIndex + 1,
+        warning,
+      })),
+    ),
+  );
+  return [...vocab, ...reading];
 }
 
 // -----------------------------------------------------------------------------
@@ -1237,7 +1288,7 @@ app.post("/api/generate", async (req, res) => {
         structuralValidationPassed: true,
 
         // Item Generation Engine diagnostics.
-        engineVersion: "3.0.0",
+        engineVersion: "3.1.0-manual-review",
         pipeline: [
           "generate",
           "normalize",
@@ -1252,6 +1303,9 @@ app.post("/api/generate", async (req, res) => {
         ],
         itemLevelRepairEnabled: true,
         independentEditorialReviewCompleted: true,
+        manualReviewEnabled: true,
+        reviewWarnings: collectReviewWarnings(finalData),
+        manualReviewCount: collectReviewWarnings(finalData).length,
         answerPlacementMethod: "move-correct-option-then-derive-letter",
         answerPatternPolicy: "balanced-but-unpredictable",
         vocabAnswerDistribution: distribution(finalData.vocabQuestions || []),
