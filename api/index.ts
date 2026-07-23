@@ -1286,9 +1286,10 @@ app.post("/api/generate", async (req, res) => {
         // Compatibility flags consumed by the current App.tsx.
         editorialPassCompleted: true,
         structuralValidationPassed: true,
+        itemLevelWarningsAreNonBlocking: true,
 
         // Item Generation Engine diagnostics.
-        engineVersion: "3.1.0-manual-review",
+        engineVersion: "3.2.0-nonblocking-manual-review",
         pipeline: [
           "generate",
           "normalize",
