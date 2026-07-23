@@ -205,6 +205,45 @@ export default function App() {
     if (!["A", "B", "C", "D"].includes(answer)) warnings.push(`${label} 的答案代號無效，請人工指定。`);
     if (!q.explanation || typeof q.explanation !== "string") warnings.push(`${label} 缺少答案解析，請人工補充。`);
 
+    // Client-side semantic safety net. These patterns describe open-world or
+    // personal-fact questions for which several options can be true because the
+    // stem contains no discriminating evidence. The server performs a deeper AI
+    // audit, but the UI still marks them if metadata is ever lost or omitted.
+    const stem = String(q.question || "").toLowerCase();
+    const rawTexts = options.map(opt => opt.replace(/^\([A-D]\)\s*/, "").trim());
+    const relationshipWords = new Set(["wife", "husband", "brother", "sister", "daughter", "son", "friend", "mother", "father", "cousin", "colleague"]);
+    const languageWords = new Set(["english", "french", "german", "spanish", "chinese", "japanese", "korean", "italian"]);
+    const animalWords = new Set(["rat", "mouse", "squirrel", "rabbit", "cat", "dog", "bird", "fox", "deer"]);
+    const normalized = rawTexts.map(text => text.toLowerCase().replace(/[^a-z-]/g, ""));
+    const allFrom = (set: Set<string>) => normalized.length === 4 && normalized.every(text => set.has(text));
+
+    if (/what language do you speak|i speak\s+_{2,}/i.test(stem) && allFrom(languageWords)) {
+      warnings.push(`${label} 屬於個人事實題，題幹沒有提供判斷語言的線索，多個選項都可能成立。`);
+    }
+    if (/(?:my|his|her|their)\s+[^.]{0,35}'s?\s+_{2,}|supportive of (?:him|her|them)/i.test(stem) && allFrom(relationshipWords)) {
+      warnings.push(`${label} 缺少可區分人物關係的語境，多個人物選項都可能成立。`);
+    }
+    if (/chased\s+(?:an?\s+)?_{2,}/i.test(stem) && allFrom(animalWords)) {
+      warnings.push(`${label} 缺少可區分動物選項的語境，數個選項在現實情境中都合理。`);
+    }
+
+    // Evidence-consistency safety net: “just behind the winner” can only mean second place.
+    if (/just behind the winner/i.test(stem)) {
+      const keyedIndex = ["A", "B", "C", "D"].indexOf(answer);
+      const keyedText = normalized[keyedIndex] || "";
+      if (keyedText !== "second") {
+        warnings.push(`${label} 的答案與題幹明確線索矛盾：just behind the winner 應為 second。`);
+      }
+      const explanation = String(q.explanation || "").toLowerCase();
+      if (!/second|第二名/.test(explanation)) {
+        warnings.push(`${label} 的解析沒有依據題幹明確線索，可能加入題幹不存在的資訊。`);
+      }
+    }
+
+    if (/finished in\s+_{2,}\s+place/i.test(stem) && !/(winner|behind|ahead|first|second|third|last|final|only|one place|two places)/i.test(stem)) {
+      warnings.push(`${label} 的名次題缺少足夠排序資訊，無法唯一決定答案。`);
+    }
+
     return warnings;
   };
 
