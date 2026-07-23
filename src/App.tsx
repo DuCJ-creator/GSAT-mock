@@ -190,29 +190,22 @@ export default function App() {
     return String(ans).replace(/[()]/g, "").trim().toUpperCase();
   };
 
-  const validateQuestionPayload = (q: any, kind: "vocab" | "reading", label: string) => {
+  const inspectQuestionPayload = (q: any, kind: "vocab" | "reading", label: string): string[] => {
+    const warnings: string[] = [];
     const options = normalizeOptions(q.options || q.choices);
     const answer = normalizeAnswer(q.correctAnswer || q.answer);
     const optionTexts = options.map(opt => opt.replace(/^\([A-D]\)\s*/, "").trim().toLowerCase());
 
-    if (!q.question || typeof q.question !== "string") {
-      throw new Error(`${label} 缺少題目文字。`);
-    }
-    if (kind === "vocab" && !/_{3,}/.test(q.question)) {
-      throw new Error(`${label} 缺少清楚的作答空格。`);
-    }
-    if (options.length !== 4 || options.some(opt => !opt.replace(/^\([A-D]\)\s*/, "").trim())) {
-      throw new Error(`${label} 必須有四個完整選項。`);
-    }
-    if (new Set(optionTexts).size !== 4) {
-      throw new Error(`${label} 含有重複選項，請重新生成。`);
-    }
-    if (!["A", "B", "C", "D"].includes(answer)) {
-      throw new Error(`${label} 的答案代號無效。`);
-    }
-    if (!q.explanation || typeof q.explanation !== "string") {
-      throw new Error(`${label} 缺少答案解析。`);
-    }
+    // Item-level defects are non-blocking. They are surfaced to the teacher for
+    // manual correction instead of causing the entire generated paper to be discarded.
+    if (!q.question || typeof q.question !== "string") warnings.push(`${label} 缺少題目文字。`);
+    if (kind === "vocab" && (!q.question || !/_{3,}/.test(q.question))) warnings.push(`${label} 缺少清楚的作答空格。`);
+    if (options.length !== 4 || options.some(opt => !opt.replace(/^\([A-D]\)\s*/, "").trim())) warnings.push(`${label} 必須有四個完整選項。`);
+    if (new Set(optionTexts.filter(Boolean)).size !== optionTexts.filter(Boolean).length) warnings.push(`${label} 含有重複選項，請人工修改。`);
+    if (!["A", "B", "C", "D"].includes(answer)) warnings.push(`${label} 的答案代號無效，請人工指定。`);
+    if (!q.explanation || typeof q.explanation !== "string") warnings.push(`${label} 缺少答案解析，請人工補充。`);
+
+    return warnings;
   };
 
   const validateBalancedDistribution = (distribution: Record<string, number> | undefined, label: string) => {
@@ -335,15 +328,22 @@ export default function App() {
           if (resVocabData.data.vocabQuestions.length !== 10) {
             throw new Error("字彙題數量不正確，系統已停止載入這份試卷。");
           }
-          resVocabData.data.vocabQuestions.forEach((q: any, idx: number) =>
-            validateQuestionPayload(q, "vocab", `字彙題第 ${idx + 1} 題`)
-          );
-          finalSuiteData.vocabQuestions = resVocabData.data.vocabQuestions.map((q: any, idx: number) => ({
-            ...q,
-            id: q.id || `vocab-${idx}-${ts}`,
-            options: normalizeOptions(q.options || q.choices),
-            correctAnswer: normalizeAnswer(q.correctAnswer || q.answer)
-          }));
+          finalSuiteData.vocabQuestions = resVocabData.data.vocabQuestions.map((q: any, idx: number) => {
+            const clientWarnings = inspectQuestionPayload(q, "vocab", `字彙題第 ${idx + 1} 題`);
+            const reviewWarnings = Array.from(new Set([...(q.reviewWarnings || []), ...clientWarnings]));
+            return {
+              ...q,
+              id: q.id || `vocab-${idx}-${ts}`,
+              question: typeof q.question === "string" ? q.question : "",
+              options: normalizeOptions(q.options || q.choices),
+              correctAnswer: ["A", "B", "C", "D"].includes(normalizeAnswer(q.correctAnswer || q.answer))
+                ? normalizeAnswer(q.correctAnswer || q.answer)
+                : "A",
+              explanation: typeof q.explanation === "string" ? q.explanation : "",
+              reviewStatus: reviewWarnings.length ? "manual-review" : (q.reviewStatus || "approved"),
+              reviewWarnings
+            };
+          });
           console.log("NORMALIZED VOCAB Q1:", JSON.stringify(finalSuiteData.vocabQuestions[0], null, 2));
         } else {
           throw new Error("生成學測字彙題失敗，請重試。");
@@ -387,17 +387,24 @@ export default function App() {
               if ((passages[0].questions || []).length !== 4) {
                 throw new Error(`${lvlLabel} 閱讀題必須恰好有 4 題。`);
               }
-              (passages[0].questions || []).forEach((q: any, qIdx: number) =>
-                validateQuestionPayload(q, "reading", `${lvlLabel} 第 ${qIdx + 1} 題`)
-              );
               const passage = {
                 ...passages[0],
-                questions: (passages[0].questions || []).map((q: any, qIdx: number) => ({
-                  ...q,
-                  id: q.id || `reading-${lvl}-${qIdx}-${rts}`,
-                  options: normalizeOptions(q.options || q.choices),
-                  correctAnswer: normalizeAnswer(q.correctAnswer || q.answer)
-                }))
+                questions: (passages[0].questions || []).map((q: any, qIdx: number) => {
+                  const clientWarnings = inspectQuestionPayload(q, "reading", `${lvlLabel} 第 ${qIdx + 1} 題`);
+                  const reviewWarnings = Array.from(new Set([...(q.reviewWarnings || []), ...clientWarnings]));
+                  return {
+                    ...q,
+                    id: q.id || `reading-${lvl}-${qIdx}-${rts}`,
+                    question: typeof q.question === "string" ? q.question : "",
+                    options: normalizeOptions(q.options || q.choices),
+                    correctAnswer: ["A", "B", "C", "D"].includes(normalizeAnswer(q.correctAnswer || q.answer))
+                      ? normalizeAnswer(q.correctAnswer || q.answer)
+                      : "A",
+                    explanation: typeof q.explanation === "string" ? q.explanation : "",
+                    reviewStatus: reviewWarnings.length ? "manual-review" : (q.reviewStatus || "approved"),
+                    reviewWarnings
+                  };
+                })
               };
               finalSuiteData.readingPassages.push(passage);
             } else {
