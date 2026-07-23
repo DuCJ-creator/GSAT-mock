@@ -474,7 +474,10 @@ NON-NEGOTIABLE ITEM RULES
 3. The correct target word may be inflected only as ordinary grammar requires: sound -> sounds, study -> studied, child -> children, careful -> carefully.
 4. wordTested remains the source-list dictionary entry; answerText is the exact form shown in the option.
 5. The sentence must have one and only one defensible answer. It is not a "best answer" question.
-6. Add a semantic lock: definition, cause, consequence, contrast, purpose, factual detail, or fixed collocation that excludes all distractors.
+6. Add a semantic lock: definition, cause, consequence, contrast, purpose, chronology, quantity, factual detail, or fixed collocation that excludes all distractors.
+7. The stem must contain enough context for an independent reader to prove the answer from the sentence itself. Never rely on unknown personal facts or generic real-world possibilities.
+8. Before returning, insert every option into the blank. If more than one option can fit, rewrite the stem with a stronger clue or replace the distractor.
+9. The explanation must quote or accurately paraphrase the exact clue that forces the answer. It must not invent any fact not present in the stem.
 7. Avoid generic frames where many adjectives or verbs could fit, such as "The athlete's ___ performance impressed everyone."
 8. Distractors may look plausible at first glance but must become clearly wrong in the exact sentence because of meaning, grammar, collocation, logic, or register.
 9. Silently insert all four options into the sentence. If a competent English teacher could defend a distractor, rewrite the sentence or replace it.
@@ -539,6 +542,129 @@ FINAL FORM AUDIT
 7. Independently recompute correctAnswer from the corrected options and set answerText to that exact option text.
 8. Write a complete Traditional Chinese explanation that explicitly explains the grammatical form and semantic role, then explains why each distractor fails.
 Return JSON only.`;
+
+const VOCAB_SET_SEMANTIC_AUDITOR_SYSTEM = `You are a senior item-bank quality auditor.
+Return JSON only.
+
+Review the complete vocabulary set AFTER all repairs. Do not rewrite questions.
+For every item, independently solve the item from the stem before looking at the keyed answer.
+
+MANDATORY EVIDENCE TEST
+1. Quote or precisely identify the exact words in the stem that force the answer.
+2. Decide which option is supported by that evidence.
+3. Compare that independently derived answer with correctAnswer.
+4. Check whether the explanation invents facts, reverses the evidence, ignores an explicit clue, or merely asserts that the keyed option is better.
+5. Confirm the stem contains enough context to exclude all three distractors.
+
+Flag an item for manual review when:
+- the keyed answer conflicts with an explicit clue in the stem;
+- the explanation adds information not present in the stem;
+- two or more options can be grammatically and semantically true;
+- the item asks a personal or open-world fact with no evidence;
+- several family members, animals, places, occupations, foods, languages, rankings, or other concrete nouns could equally fit;
+- the stem provides only a generic frame and no semantic lock;
+- the explanation chooses a merely better answer rather than the only defensible answer;
+- the stem depends on unknown real-world circumstances rather than information in the sentence.
+
+A valid vocabulary item must contain a semantic lock such as a definition, cause, consequence, contrast, purpose, chronology, quantity, fixed collocation, or explicit factual clue.
+Do not flag an item merely because distractors are grammatically parallel.
+Return one result for every question, using its zero-based index. Warnings must be concise Traditional Chinese.`;
+
+const vocabSetAuditSchema: any = {
+  type: Type.OBJECT,
+  properties: {
+    results: {
+      type: Type.ARRAY,
+      items: {
+        type: Type.OBJECT,
+        properties: {
+          index: { type: Type.NUMBER },
+          pass: { type: Type.BOOLEAN },
+          warnings: { type: Type.ARRAY, items: { type: Type.STRING } },
+          evidence: { type: Type.STRING },
+          independentlyDerivedAnswer: { type: Type.STRING },
+        },
+        required: ["index", "pass", "warnings", "evidence", "independentlyDerivedAnswer"],
+      },
+    },
+  },
+  required: ["results"],
+};
+
+function deterministicOpenWorldWarnings(question: ExamQuestion): string[] {
+  const warnings: string[] = [];
+  const stem = String(question.question || "").toLowerCase();
+  const texts = question.options.map(stripOptionLabel).map((text) => text.toLowerCase().replace(/[^a-z-]/g, ""));
+  const allIn = (words: string[]) => texts.length === 4 && texts.every((text) => words.includes(text));
+
+  if (/what language do you speak|i speak\s+_{2,}/i.test(stem) && allIn(["english", "french", "german", "spanish", "chinese", "japanese", "korean", "italian"])) {
+    warnings.push("題幹未提供語言判斷線索，四個語言選項都可能成立");
+  }
+  if (/supportive of (?:him|her|them)|(?:my|his|her|their)\s+[^.]{0,35}'s?\s+_{2,}/i.test(stem) && allIn(["wife", "husband", "brother", "sister", "daughter", "son", "friend", "mother", "father", "cousin", "colleague"])) {
+    warnings.push("題幹未提供人物關係線索，多個人物選項都可能成立");
+  }
+  if (/chased\s+(?:an?\s+)?_{2,}/i.test(stem) && allIn(["rat", "mouse", "squirrel", "rabbit", "cat", "dog", "bird", "fox", "deer"])) {
+    warnings.push("題幹未提供足以排除其他動物的線索，多個選項都合理");
+  }
+
+  // Explicit evidence rule: “just behind the winner” means second place.
+  if (/just behind the winner/i.test(stem)) {
+    const keyed = texts[LETTERS.indexOf(question.correctAnswer)];
+    if (keyed !== "second") {
+      warnings.push("答案與題幹明確線索矛盾：『just behind the winner』表示第二名");
+    }
+    if (!/second|第二名/.test(String(question.explanation || "").toLowerCase())) {
+      warnings.push("解析未依據『just behind the winner』這項明確線索作答，可能加入題幹未提供的資訊");
+    }
+  }
+
+  // Generic ordinal-place stems need an explicit clue that uniquely determines rank.
+  if (/finished in\s+_{2,}\s+place/i.test(stem) && !/(winner|behind|ahead|first|second|third|last|final|only|one place|two places)/i.test(stem)) {
+    warnings.push("名次題缺少可唯一決定答案的明確排序線索");
+  }
+  return warnings;
+}
+
+async function auditVocabularySetForManualReview(questions: ExamQuestion[]): Promise<ExamQuestion[]> {
+  const deterministic = questions.map(deterministicOpenWorldWarnings);
+  try {
+    const audit = await callJsonModel<any>(
+      VOCAB_SET_SEMANTIC_AUDITOR_SYSTEM,
+      `Audit this complete set. Return one result for every index. For each item, first solve it independently, identify the exact supporting evidence, and then compare your answer with the keyed answer and explanation.\n${JSON.stringify({ questions })}`,
+      vocabSetAuditSchema,
+      0,
+    );
+    const byIndex = new Map<number, string[]>();
+    for (const result of Array.isArray(audit?.results) ? audit.results : []) {
+      const index = Number(result?.index);
+      if (!Number.isInteger(index) || index < 0 || index >= questions.length) continue;
+      const warnings = Array.isArray(result?.warnings) ? result.warnings.map(String).filter(Boolean) : [];
+      const evidence = String(result?.evidence || "").trim();
+      const derived = String(result?.independentlyDerivedAnswer || "").replace(/[()]/g, "").trim().toUpperCase();
+      if (result?.pass === false && warnings.length === 0) warnings.push("語意審核未能確認本題只有一個可辯護答案");
+      if (!evidence) warnings.push("審核未能指出題幹中支持答案的明確證據，題目可能缺少足夠語境");
+      if (LETTERS.includes(derived as AnswerLetter) && derived !== questions[index].correctAnswer) {
+        warnings.push(`獨立作答結果為 ${derived}，但系統答案為 ${questions[index].correctAnswer}，答案鍵可能錯誤`);
+      }
+      byIndex.set(index, warnings);
+    }
+    return questions.map((question, index) =>
+      attachReviewMetadata(question, [
+        ...(question.reviewWarnings || []),
+        ...deterministic[index],
+        ...(byIndex.get(index) || []),
+      ]),
+    );
+  } catch (error) {
+    console.warn("Set-level semantic audit failed; using deterministic warnings only:", error);
+    return questions.map((question, index) =>
+      attachReviewMetadata(question, [
+        ...(question.reviewWarnings || []),
+        ...deterministic[index],
+      ]),
+    );
+  }
+}
 
 const READING_WRITER_SYSTEM = `You are a professional Taiwan GSAT reading-comprehension item writer.
 Return JSON only.
@@ -1053,7 +1179,7 @@ async function buildVocabularySection(
     }
   }
 
-  return balanced.map((question, index) => {
+  const structurallyAnnotated = balanced.map((question, index) => {
     const errors = validateQuestion(question, "vocab");
     if (!sameLemma(question.wordTested, targetWords[index].word)) {
       errors.push(`wordTested no longer matches assigned target "${targetWords[index].word}"`);
@@ -1066,6 +1192,11 @@ async function buildVocabularySection(
     }
     return attachReviewMetadata(question, [...hard, ...soft]);
   });
+
+  // One efficient set-level semantic audit catches open-world ambiguity that a
+  // repair model may overlook (e.g. four languages, relatives, or animals that
+  // could all truthfully fill a context-free blank). These are warnings only.
+  return auditVocabularySetForManualReview(structurallyAnnotated);
 }
 
 // -----------------------------------------------------------------------------
@@ -1289,7 +1420,7 @@ app.post("/api/generate", async (req, res) => {
         itemLevelWarningsAreNonBlocking: true,
 
         // Item Generation Engine diagnostics.
-        engineVersion: "3.2.0-nonblocking-manual-review",
+        engineVersion: "3.4.0-evidence-context-audit",
         pipeline: [
           "generate",
           "normalize",
@@ -1297,6 +1428,7 @@ app.post("/api/generate", async (req, res) => {
           "editorial-review",
           "context-aware-morphology-plan",
           "mandatory-morphology-audit",
+          "set-level-open-world-ambiguity-audit",
           "item-level-repair-or-replace",
           "move-correct-option",
           "balanced-unpredictable-placement",
