@@ -213,27 +213,55 @@ export default function App() {
     if (!q.explanation || typeof q.explanation !== "string") {
       throw new Error(`${label} 缺少答案解析。`);
     }
+  };
 
-    const explanation = q.explanation.trim();
-    const ambiguitySignals = [
-      /(?:雖然|儘管).{0,35}(?:但|然而).{0,35}(?:更|較|不如|更能|更為)/,
-      /(?:也可以|亦可|尚可|可以成立|同樣合理|也合理|並非錯誤|不是完全錯誤)/,
-      /(?:最佳|最適合|較適合|更適合|更貼切|較貼切|更能強調|較能強調|不如.{0,20}(?:自然|貼切|適合))/,
-      /(?:could also fit|also acceptable|also possible|more appropriate|best answer|better fits)/i,
-    ];
-    if (ambiguitySignals.some(pattern => pattern.test(explanation))) {
-      throw new Error(`${label} 的解析承認其他選項也可能成立，屬於有歧義題目，系統已拒絕載入。`);
+  const validateBalancedDistribution = (distribution: Record<string, number> | undefined, label: string) => {
+    if (!distribution) throw new Error(`${label} 未通過答案分布檢查。`);
+    const counts = ["A", "B", "C", "D"].map(letter => Number(distribution[letter] || 0));
+    if (Math.max(...counts) - Math.min(...counts) > 1) {
+      throw new Error(`${label} 的正確答案過度集中，請重新生成。`);
     }
   };
 
   const assertQualityAssurance = (payload: any) => {
     const qa = payload?.qualityAssurance;
-    if (!qa?.editorialPassCompleted || !qa?.structuralValidationPassed) {
-      throw new Error("試題未完成文法、歧義與答案一致性審核，請重新生成。");
+    if (qa && qa.structuralValidationPassed === false) {
+      throw new Error("試卷資料結構不完整，無法顯示。");
     }
-    // Answer-distribution metadata is informational only. The server is
-    // responsible for creating a balanced-but-unpredictable key and for
-    // preserving the actual correct option while moving it.
+    // Editorial warnings are intentionally non-blocking. Questions that could
+    // not fully pass review are returned with reviewStatus/manual warnings and
+    // can be corrected by the teacher in the player before printing.
+  };
+
+  const updateVocabQuestion = (questionIndex: number, patch: Record<string, any>) => {
+    setExamSuite(prev => {
+      if (!prev?.vocabQuestions) return prev;
+      const vocabQuestions = prev.vocabQuestions.map((question: any, index: number) =>
+        index === questionIndex ? { ...question, ...patch } : question
+      );
+      return { ...prev, vocabQuestions } as GeneratedExamSuite;
+    });
+  };
+
+  const updateVocabOption = (questionIndex: number, letter: string, value: string) => {
+    setExamSuite(prev => {
+      if (!prev?.vocabQuestions) return prev;
+      const vocabQuestions = prev.vocabQuestions.map((question: any, index: number) => {
+        if (index !== questionIndex) return question;
+        const options = ["A", "B", "C", "D"].map(currentLetter => {
+          if (currentLetter === letter) return `(${currentLetter}) ${value}`;
+          return question.options.find((option: string) => option.startsWith(`(${currentLetter})`)) || `(${currentLetter})`;
+        });
+        const correctIndex = ["A", "B", "C", "D"].indexOf(question.correctAnswer);
+        const answerText = options[correctIndex]?.replace(/^\([A-D]\)\s*/, "").trim();
+        return { ...question, options, answerText };
+      });
+      return { ...prev, vocabQuestions } as GeneratedExamSuite;
+    });
+  };
+
+  const approveVocabQuestion = (questionIndex: number) => {
+    updateVocabQuestion(questionIndex, { reviewStatus: "approved", reviewWarnings: [] });
   };
 
   const handleGenerateExam = async () => {
@@ -752,9 +780,55 @@ export default function App() {
                       {examSuite.vocabQuestions.map((q, qIndex) => {
                         const userSelectedChoice = session.answers.vocab[q.id] || "";
                         return (
-                          <div key={q.id} className="space-y-3 text-sm p-4 hover:bg-stone-50/50 rounded-xl transition duration-150 border border-transparent hover:border-stone-150">
-                            <span className="font-mono text-xs font-bold text-amber-800 bg-amber-50 rounded-lg px-2 py-0.5">Question {qIndex + 1}</span>
-                            <p className="font-semibold text-stone-900 text-base leading-relaxed">{q.question}</p>
+                          <div key={q.id} className={`space-y-3 text-sm p-4 rounded-xl transition duration-150 border ${(q as any).reviewStatus === "manual-review" ? "border-amber-400 bg-amber-50/40" : "border-transparent hover:border-stone-150 hover:bg-stone-50/50"}`}>
+                            <div className="flex items-center justify-between gap-3">
+                              <span className="font-mono text-xs font-bold text-amber-800 bg-amber-50 rounded-lg px-2 py-0.5">Question {qIndex + 1}</span>
+                              {(q as any).reviewStatus === "manual-review" && (
+                                <span className="text-[10px] font-bold text-amber-900 bg-amber-200/70 px-2 py-1 rounded-full">⚠ Needs teacher review</span>
+                              )}
+                            </div>
+                            {(q as any).reviewStatus === "manual-review" ? (
+                              <div className="space-y-3 rounded-xl border border-amber-300 bg-white p-4">
+                                <div className="text-xs text-amber-900">
+                                  <p className="font-bold mb-1">自動審題未完全通過，請人工確認：</p>
+                                  <ul className="list-disc pl-5 space-y-0.5">
+                                    {((q as any).reviewWarnings || []).map((warning: string, warningIndex: number) => (
+                                      <li key={warningIndex}>{warning}</li>
+                                    ))}
+                                  </ul>
+                                </div>
+                                <label className="block text-xs font-bold text-stone-600">
+                                  題幹
+                                  <textarea value={q.question} onChange={(event) => updateVocabQuestion(qIndex, { question: event.target.value })} rows={2} className="mt-1 w-full rounded-lg border border-stone-300 p-2 font-normal text-stone-900" />
+                                </label>
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                                  {["A", "B", "C", "D"].map(letter => {
+                                    const option = q.options.find((item: string) => item.startsWith(`(${letter})`)) || `(${letter})`;
+                                    return (
+                                      <label key={letter} className="text-xs font-bold text-stone-600">
+                                        選項 {letter}
+                                        <input value={option.replace(/^\([A-D]\)\s*/, "")} onChange={(event) => updateVocabOption(qIndex, letter, event.target.value)} className="mt-1 w-full rounded-lg border border-stone-300 p-2 font-normal text-stone-900" />
+                                      </label>
+                                    );
+                                  })}
+                                </div>
+                                <div className="grid grid-cols-1 md:grid-cols-4 gap-2">
+                                  <label className="text-xs font-bold text-stone-600">
+                                    正確答案
+                                    <select value={q.correctAnswer} onChange={(event) => updateVocabQuestion(qIndex, { correctAnswer: event.target.value, answerText: q.options.find((item: string) => item.startsWith(`(${event.target.value})`))?.replace(/^\([A-D]\)\s*/, "") || "" })} className="mt-1 w-full rounded-lg border border-stone-300 p-2 font-normal text-stone-900">
+                                      {["A", "B", "C", "D"].map(letter => <option key={letter} value={letter}>{letter}</option>)}
+                                    </select>
+                                  </label>
+                                  <label className="md:col-span-3 text-xs font-bold text-stone-600">
+                                    解析
+                                    <textarea value={(q as any).explanation || ""} onChange={(event) => updateVocabQuestion(qIndex, { explanation: event.target.value })} rows={2} className="mt-1 w-full rounded-lg border border-stone-300 p-2 font-normal text-stone-900" />
+                                  </label>
+                                </div>
+                                <button type="button" onClick={() => approveVocabQuestion(qIndex)} className="rounded-lg bg-amber-800 px-4 py-2 text-xs font-bold text-white hover:bg-amber-900">人工確認完成</button>
+                              </div>
+                            ) : (
+                              <p className="font-semibold text-stone-900 text-base leading-relaxed">{q.question}</p>
+                            )}
                             <div className="grid grid-cols-1 md:grid-cols-4 gap-2.5 mt-4">
                               {["A", "B", "C", "D"].map((letter) => {
                                 const optString = q.options.find((o: string) => o.startsWith(`(${letter})`)) || `(${letter})`;
