@@ -153,7 +153,12 @@ export default function WorksheetExport({ suite, onBack }: WorksheetExportProps)
   };
 
   const handleDownloadInteractiveHtml = () => {
-    const serializedData = JSON.stringify(suite);
+    // Keep the embedded exam data human-readable so teachers can edit the
+    // downloaded HTML directly in GitHub or any text editor.
+    // Escape only sequences that could prematurely close the JSON script block.
+    const serializedData = JSON.stringify(suite, null, 2)
+      .replace(/<\/script/gi, "<\\/script")
+      .replace(/<!--/g, "<\\!--");
     
     const htmlContent = `<!DOCTYPE html>
 <html lang="zh-TW">
@@ -333,9 +338,23 @@ export default function WorksheetExport({ suite, onBack }: WorksheetExportProps)
     </div>
   </div>
 
+  <!-- =====================================================
+       TEACHER EDIT AREA / 教師人工編輯區
+       You may directly edit questions, options, correctAnswer, wordTested,
+       answerText, explanations, passages, and other exam content below.
+       Keep the JSON syntax valid and do not remove the surrounding script tag.
+  ====================================================== -->
+  <script id="exam-data" type="application/json">
+${serializedData}
+  </script>
+
   <script>
-    // Embedded exam suite data
-    const EXAM_DATA = JSON.parse(decodeURIComponent("${encodeURIComponent(serializedData)}"));
+    // Load the human-readable embedded exam data.
+    const examDataElement = document.getElementById("exam-data");
+    if (!examDataElement) {
+      throw new Error("Embedded exam data was not found.");
+    }
+    const EXAM_DATA = JSON.parse(examDataElement.textContent || "{}");
 
     // State object
     let state = {
