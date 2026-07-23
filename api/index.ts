@@ -124,6 +124,14 @@ type ExamQuestion = {
   answerText?: string;
 };
 
+type MorphologyPlan = {
+  slotCategory: "verb" | "adjective" | "noun" | "adverb" | "participle" | "other";
+  requiredForm: string;
+  semanticRole: string;
+  targetSurfaceForm: string;
+  rationale: string;
+};
+
 type ReadingPassage = {
   level: string;
   title: string;
@@ -444,6 +452,10 @@ NON-NEGOTIABLE ITEM RULES
 8. Distractors may look plausible at first glance but must become clearly wrong in the exact sentence because of meaning, grammar, collocation, logic, or register.
 9. Silently insert all four options into the sentence. If a competent English teacher could defend a distractor, rewrite the sentence or replace it.
 10. Use natural standard English with correct agreement, tense, number, articles, prepositions, and punctuation.
+10a. Every displayed option must be in the exact grammatical form required by the blank. Determine the grammatical slot BEFORE choosing the surface form.
+10b. For emotion/causative participles, distinguish experiencer from cause: a person who feels the emotion normally takes the -ed form (She felt embarrassed); a thing, event, or situation that causes the emotion normally takes the -ing form (an embarrassing situation). Do not mechanically convert every target to -ed.
+10c. Handle all ordinary context-driven morphology: third-person singular, past tense, past participle, passive voice, gerund, plural, comparative/superlative, adjective, adverb, and appropriate derivation.
+10d. Keep the lexical focus on different words, but make all four displayed choices grammatically compatible with the same slot whenever possible; distractors should fail mainly because of meaning or collocation, not because they were left in dictionary form.
 11. Return options in A-B-C-D order, each prefixed (A), (B), (C), (D). correctAnswer is one bare letter.
 12. The Traditional Chinese explanation must identify why the keyed answer is required and why EACH distractor is impossible in this exact context.
 13. Never say another option is possible but less suitable. Never use language such as 最佳、較貼切、更適合、雖然也可以.
@@ -456,6 +468,9 @@ You receive one draft item. Repair it completely and return one corrected JSON o
 AUDIT PROCEDURE
 - Insert each of the four options into the sentence.
 - Confirm grammar, natural usage, collocation, semantic direction, and logical fit.
+- Inspect the exact form of EVERY displayed option. A dictionary-form verb must never remain where the blank requires an adjective, participle, third-person singular, past tense, plural, comparative, or other inflected form.
+- For emotion/causative pairs, identify semantic role: experiencer/person -> -ed (felt embarrassed); cause/event/thing -> -ing (an embarrassing situation). Never use a blanket base-to--ed rule.
+- Keep four different lexical items, but inflect each displayed choice into a form that is grammatically compatible with the slot whenever possible.
 - Confirm the options are four distinct vocabulary items, not forms or derivatives of one base word.
 - Confirm exactly one answer is defensible. If another option could fit, rewrite the stem or replace that distractor.
 - Preserve wordTested as the intended source-list lemma, but inflect the displayed answer when grammar requires it.
@@ -464,6 +479,39 @@ AUDIT PROCEDURE
 - Write a complete Traditional Chinese explanation: why the answer is required and why A, B, C, and D alternatives fail in the exact context.
 - Never admit that another choice is acceptable, possible, or merely less natural.
 - Return JSON only.`;
+
+
+const VOCAB_MORPHOLOGY_ANALYZER_SYSTEM = `You are an English morphology and syntax analyzer for a Taiwan GSAT item bank.
+Return JSON only.
+
+Analyze the sentence slot and the target lexeme before any option is accepted.
+You must determine:
+- the grammatical category required by the blank;
+- the exact surface form required by agreement, tense, voice, number, comparison, or derivation;
+- the semantic role of the modified noun or subject;
+- for emotion/causative participles, whether the referent EXPERIENCES the feeling (-ed) or CAUSES the feeling (-ing).
+Examples:
+- She felt completely ___ (embarrass) -> embarrassed: the person experiences the feeling.
+- It was an ___ situation (embarrass) -> embarrassing: the situation causes the feeling.
+- The music ___ beautiful (sound) -> sounds: present-tense third-person singular verb.
+- The report was ___ yesterday (complete) -> completed: passive past participle.
+Do not mechanically prefer -ed or -ing. Base the form on syntax and meaning.`;
+
+const VOCAB_GRAMMAR_AUDITOR_SYSTEM = `You are a meticulous English grammar, syntax, and context-aware morphology editor for a Taiwan GSAT item bank.
+Return one corrected vocabulary-question JSON object only.
+
+FINAL FORM AUDIT
+1. Follow the supplied morphology plan. Insert each displayed option into the blank exactly as written.
+2. Correct every option's surface form so it matches the grammatical slot: agreement, tense, voice, participle, adjective, adverb, number, comparison, and derivation when necessary.
+3. For emotion/causative pairs, use semantic role, not a mechanical rule:
+   - experiencer/person: embarrassed, interested, bored, confused, exhausted;
+   - cause/event/thing: embarrassing, interesting, boring, confusing, exhausting.
+4. The keyed target must remain the same lexeme recorded in wordTested, but answerText must be the exact contextually required form shown in the option.
+5. Preserve four different lexical items. Do not turn the item into a word-family/conjugation exercise.
+6. Keep exactly one semantically and collocationally defensible answer.
+7. Independently recompute correctAnswer from the corrected options and set answerText to that exact option text.
+8. Write a complete Traditional Chinese explanation that explicitly explains the grammatical form and semantic role, then explains why each distractor fails.
+Return JSON only.`;
 
 const READING_WRITER_SYSTEM = `You are a professional Taiwan GSAT reading-comprehension item writer.
 Return JSON only.
@@ -683,6 +731,68 @@ Return one fully repaired question object.`;
   return normalizeQuestion(raw, "vocab");
 }
 
+
+const morphologyPlanSchema: any = {
+  type: Type.OBJECT,
+  properties: {
+    slotCategory: { type: Type.STRING },
+    requiredForm: { type: Type.STRING },
+    semanticRole: { type: Type.STRING },
+    targetSurfaceForm: { type: Type.STRING },
+    rationale: { type: Type.STRING },
+  },
+  required: ["slotCategory", "requiredForm", "semanticRole", "targetSurfaceForm", "rationale"],
+};
+
+async function analyzeMorphologyPlan(
+  question: ExamQuestion,
+  targetWord: VocabularyInput,
+): Promise<MorphologyPlan> {
+  const prompt = `Analyze the blank and determine the exact contextually required form of the target lexeme.
+
+TARGET LEXEME: ${JSON.stringify(targetWord)}
+QUESTION: ${JSON.stringify(question)}
+
+Pay special attention to experiencer (-ed) versus cause (-ing), verb agreement, tense, voice, and required part of speech.`;
+
+  return callJsonModel<MorphologyPlan>(
+    VOCAB_MORPHOLOGY_ANALYZER_SYSTEM,
+    prompt,
+    morphologyPlanSchema,
+    0,
+  );
+}
+
+async function grammarAuditVocabularyQuestion(
+  question: ExamQuestion,
+  targetWord: VocabularyInput,
+  selectedLevel: number | string,
+  morphologyPlan: MorphologyPlan,
+): Promise<ExamQuestion> {
+  const prompt = `Perform a final grammar-and-inflection audit on this Level ${selectedLevel || "mixed"} vocabulary item.
+The required source lexeme is "${targetWord.word}"${targetWord.pos ? ` (${targetWord.pos})` : ""}.
+Preserve wordTested exactly as "${targetWord.word}".
+Correct the exact displayed forms of all four options.
+
+MANDATORY MORPHOLOGY PLAN
+${JSON.stringify(morphologyPlan)}
+
+The keyed answer must realize targetSurfaceForm unless the plan itself is internally impossible; in that case repair the sentence while preserving the target lexeme and the intended semantic distinction.
+
+ITEM
+${JSON.stringify(question)}
+
+Return one corrected question object only.`;
+
+  const raw = await callJsonModel<any>(
+    VOCAB_GRAMMAR_AUDITOR_SYSTEM,
+    prompt,
+    vocabQuestionSchema,
+    0.02,
+  );
+  return normalizeQuestion(raw, "vocab");
+}
+
 async function buildVocabularySection(
   vocabList: VocabularyInput[],
   selectedLevel: number | string,
@@ -874,6 +984,31 @@ async function buildVocabularySection(
       }
       current = replacement;
     }
+
+    // Mandatory final morphology audit. This catches cases such as
+    // embarrass -> embarrassed after "felt completely" even when an earlier
+    // semantic reviewer overlooked the surface form.
+    let grammarAudited = current;
+    for (let grammarAttempt = 0; grammarAttempt < 2; grammarAttempt++) {
+      try {
+        const morphologyPlan = await analyzeMorphologyPlan(grammarAudited, targetWord);
+        grammarAudited = await grammarAuditVocabularyQuestion(
+          grammarAudited,
+          targetWord,
+          selectedLevel,
+          morphologyPlan,
+        );
+        const grammarErrors = validateQuestion(grammarAudited, "vocab");
+        if (!sameLemma(grammarAudited.wordTested, targetWord.word)) {
+          grammarErrors.push(`wordTested must remain the assigned target "${targetWord.word}"`);
+        }
+        if (grammarErrors.length === 0) break;
+      } catch (error) {
+        lastError = error;
+        console.warn(`Vocabulary Q${index + 1} grammar audit ${grammarAttempt + 1} failed:`, error);
+      }
+    }
+    current = grammarAudited;
 
     reviewed.push(current);
   }
@@ -1102,12 +1237,14 @@ app.post("/api/generate", async (req, res) => {
         structuralValidationPassed: true,
 
         // Item Generation Engine diagnostics.
-        engineVersion: "2.0.0",
+        engineVersion: "3.0.0",
         pipeline: [
           "generate",
           "normalize",
           "deterministic-validate",
           "editorial-review",
+          "context-aware-morphology-plan",
+          "mandatory-morphology-audit",
           "item-level-repair-or-replace",
           "move-correct-option",
           "balanced-unpredictable-placement",
