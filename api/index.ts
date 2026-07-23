@@ -817,7 +817,60 @@ async function buildVocabularySection(
         }
       }
       if (!replacement) {
-        throw lastError || new Error(`Vocabulary question ${index + 1} could not pass quality review.`);
+        // Graceful fallback: quality remains mandatory, but suite-wide option
+        // uniqueness becomes a soft constraint after the strict repair/regeneration
+        // attempts are exhausted. This prevents one difficult item from rejecting
+        // the entire paper and surfacing an error in the frontend.
+        console.warn(
+          `Vocabulary Q${index + 1}: strict suite-wide option uniqueness could not be satisfied; retrying with quality-only validation.`,
+          lastError,
+        );
+
+        for (let fallbackAttempt = 0; fallbackAttempt < 5; fallbackAttempt++) {
+          try {
+            const fresh = await generateOneVocabularyQuestion(
+              targetWord,
+              vocabList,
+              selectedLevel,
+              reviewed.map((q) => q.question),
+              [],
+            );
+            const freshErrors = validateQuestion(fresh, "vocab");
+            if (!sameLemma(fresh.wordTested, targetWord.word)) {
+              freshErrors.push(`wordTested must be the assigned target "${targetWord.word}"`);
+            }
+
+            const repaired = await repairVocabularyQuestion(
+              fresh,
+              freshErrors,
+              targetWord,
+              vocabList,
+              selectedLevel,
+              [],
+            );
+            const repairedErrors = validateQuestion(repaired, "vocab");
+            if (!sameLemma(repaired.wordTested, targetWord.word)) {
+              repairedErrors.push(`wordTested must be the assigned target "${targetWord.word}"`);
+            }
+
+            if (repairedErrors.length === 0) {
+              replacement = repaired;
+              break;
+            }
+          } catch (error) {
+            lastError = error;
+            console.warn(
+              `Vocabulary Q${index + 1} quality-only fallback ${fallbackAttempt + 1} failed:`,
+              error,
+            );
+          }
+        }
+      }
+
+      if (!replacement) {
+        throw lastError || new Error(
+          `Vocabulary question ${index + 1} could not be generated after all repair attempts.`,
+        );
       }
       current = replacement;
     }
@@ -829,7 +882,12 @@ async function buildVocabularySection(
   if (enforceSuiteWideOptionUniqueness) {
     const duplicates = suiteDuplicateOptions(balanced);
     if (duplicates.length) {
-      throw new Error(`Vocabulary suite contains repeated option lexemes: ${duplicates.join("; ")}`);
+      // Uniqueness is preferred, not a reason to discard an otherwise valid paper.
+      // This can occur when the model cannot produce ten high-quality items while
+      // also avoiding every previously used lexeme.
+      console.warn(
+        `Vocabulary suite contains unavoidable repeated option lexemes: ${duplicates.join("; ")}`,
+      );
     }
   }
 
