@@ -156,7 +156,7 @@ export default function WorksheetExport({ suite, onBack }: WorksheetExportProps)
     // Keep the payload human-editable, but make it safe inside an HTML data block.
     // Escaping every HTML-significant character prevents any question or
     // explanation from accidentally terminating the block.
-    const serializedData = JSON.stringify(packEditableSuite(suite), null, 2)
+    const serializedData = JSON.stringify(suite, null, 2)
       .replace(/&/g, "\\u0026")
       .replace(/</g, "\\u003c")
       .replace(/>/g, "\\u003e")
