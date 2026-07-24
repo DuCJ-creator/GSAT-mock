@@ -169,22 +169,55 @@ function normalizeOptions(value: unknown): string[] {
   if (Array.isArray(value)) {
     raw = value;
   } else if (typeof value === "string") {
-    raw = value.match(/\([A-D]\)\s*[\s\S]*?(?=\s*\([A-D]\)|$)/g) || [];
+    const source = value.trim();
+
+    // Accept common model formats: (A) text, A. text, A: text, or one option per line.
+    const labeled = Array.from(
+      source.matchAll(/(?:^|\n|\r|\s)(?:\(?([A-D])\)?[.、:：\-])\s*([\s\S]*?)(?=(?:\n|\r|\s)(?:\(?[A-D]\)?[.、:：\-])\s*|$)/gi),
+    );
+    if (labeled.length === 4) {
+      raw = labeled.map((match) => match[2]);
+    } else {
+      const parenthesized = source.match(/\([A-D]\)\s*[\s\S]*?(?=\s*\([A-D]\)|$)/g);
+      if (parenthesized?.length === 4) {
+        raw = parenthesized;
+      } else {
+        const pieces = source
+          .split(/\r?\n|\s*[|;；]\s*/)
+          .map((item) => item.trim())
+          .filter(Boolean);
+        if (pieces.length === 4) raw = pieces;
+      }
+    }
   } else if (value && typeof value === "object") {
-    raw = Object.entries(value as Record<string, unknown>)
-      .sort(([a], [b]) => a.localeCompare(b))
-      .map(([, item]) => item);
+    const objectValue = value as Record<string, unknown>;
+    const keyed = LETTERS.map((letter) =>
+      objectValue[letter] ?? objectValue[`(${letter})`] ?? objectValue[letter.toLowerCase()],
+    );
+    raw = keyed.every((item) => item !== undefined)
+      ? keyed
+      : Object.entries(objectValue)
+          .sort(([a], [b]) => a.localeCompare(b))
+          .map(([, item]) => item);
   }
 
-  const texts = raw.map((item) => {
-    if (item && typeof item === "object" && !Array.isArray(item)) {
-      return stripOptionLabel(Object.values(item as Record<string, unknown>)[0]);
-    }
-    return stripOptionLabel(item);
-  });
+  const texts = raw
+    .map((item) => {
+      if (item && typeof item === "object" && !Array.isArray(item)) {
+        const objectItem = item as Record<string, unknown>;
+        const preferred = LETTERS.map((letter) => objectItem[letter] ?? objectItem[`(${letter})`])
+          .find((candidate) => candidate !== undefined);
+        return stripOptionLabel(preferred ?? Object.values(objectItem)[0]);
+      }
+      return stripOptionLabel(item);
+    })
+    .map((text) => text.trim())
+    .filter(Boolean);
 
-  if (texts.length !== 4 || texts.some((text) => !text)) {
-    throw new Error("Each question must contain exactly four non-empty options.");
+  if (texts.length !== 4) {
+    throw new Error(
+      `Model output contained ${texts.length} usable options; exactly four are required.`,
+    );
   }
 
   return texts.map((text, index) => `(${LETTERS[index]}) ${text}`);
@@ -374,6 +407,38 @@ function attachReviewMetadata(question: ExamQuestion, warnings: string[]): ExamQ
     reviewStatus: uniqueWarnings.length ? "manual-review" : "approved",
     reviewWarnings: uniqueWarnings,
   };
+}
+
+
+function createManualReviewFallbackQuestion(
+  targetWord: VocabularyInput,
+  vocabList: VocabularyInput[],
+  reason: string,
+): ExamQuestion {
+  const distractors = vocabList
+    .map((item) => String(item.word || "").trim())
+    .filter((word) => word && !sameLemma(word, targetWord.word))
+    .filter((word, index, all) => all.findIndex((item) => sameLemma(item, word)) === index)
+    .slice(0, 3);
+
+  while (distractors.length < 3) {
+    distractors.push(`review-option-${distractors.length + 1}`);
+  }
+
+  const optionTexts = [targetWord.word, ...distractors];
+  const options = optionTexts.map((text, index) => `(${LETTERS[index]}) ${text}`);
+
+  return attachReviewMetadata(
+    {
+      question: `_____ (${targetWord.word})`,
+      options,
+      correctAnswer: "A",
+      wordTested: targetWord.word,
+      answerText: targetWord.word,
+      explanation: "此題生成結果未通過自動檢查，請教師人工改寫題幹、選項、答案與解析後再發布。",
+    },
+    [`自動生成或修復失敗：${reason}`, "此題為保留試卷完整性的人工審核占位題，發布前請務必修改。"],
+  );
 }
 
 function countWords(text: string): number {
@@ -1034,25 +1099,38 @@ async function buildVocabularySection(
 
   while (questions.length < targetWords.length) {
     const targetWord = targetWords[questions.length];
-    try {
-      questions.push(
-        await generateOneVocabularyQuestion(
+    let generated: ExamQuestion | null = null;
+
+    // A malformed model response must not abort the entire paper. Retry the
+    // current item independently and let the normal repair pipeline inspect it.
+    for (let individualAttempt = 0; individualAttempt < 5; individualAttempt++) {
+      try {
+        generated = await generateOneVocabularyQuestion(
           targetWord,
           vocabList,
           selectedLevel,
           questions.map((q) => q.question),
           enforceSuiteWideOptionUniqueness ? questions : [],
-        ),
-      );
-    } catch (error) {
-      lastError = error;
-      if (questions.length === 0) throw error;
-      break;
+        );
+        break;
+      } catch (error) {
+        lastError = error;
+        console.warn(
+          `Vocabulary Q${questions.length + 1} individual generation ${individualAttempt + 1} failed:`,
+          error,
+        );
+      }
     }
+
+    if (!generated) break;
+    questions.push(generated);
   }
 
-  if (questions.length !== targetWords.length) {
-    throw lastError || new Error(`Unable to generate ${targetWords.length} vocabulary questions; received ${questions.length}.`);
+  while (questions.length < targetWords.length) {
+    const targetWord = targetWords[questions.length];
+    const reason = lastError instanceof Error ? lastError.message : String(lastError || "unknown generation failure");
+    console.warn(`Vocabulary Q${questions.length + 1} could not be generated; inserting manual-review fallback.`, lastError);
+    questions.push(createManualReviewFallbackQuestion(targetWord, vocabList, reason));
   }
 
   const reviewed: ExamQuestion[] = [];
@@ -1194,11 +1272,16 @@ async function buildVocabularySection(
       }
 
       if (!replacement) {
-        throw lastError || new Error(
-          `Vocabulary question ${index + 1} could not be generated after all repair attempts.`,
-        );
+        const reason = lastError instanceof Error ? lastError.message : String(lastError || errors.join("; "));
+        console.warn(`Vocabulary Q${index + 1} could not be fully repaired; keeping it for manual review.`, lastError);
+        current = attachReviewMetadata(current, [
+          ...(current.reviewWarnings || []),
+          ...errors,
+          `自動修復未完成：${reason}`,
+        ]);
+      } else {
+        current = replacement;
       }
-      current = replacement;
     }
 
     // Mandatory final morphology audit. A question is not allowed into the
@@ -1270,11 +1353,16 @@ async function buildVocabularySection(
       }
 
       if (!strictReplacement) {
-        throw lastError || new Error(
-          `Vocabulary question ${index + 1} still contains a hard grammar or option-design error after strict regeneration.`,
-        );
+        const reason = lastError instanceof Error ? lastError.message : String(lastError || finalErrors.join("; "));
+        console.warn(`Vocabulary Q${index + 1} still has unresolved issues; sending it to manual review.`, lastError);
+        grammarAudited = attachReviewMetadata(grammarAudited, [
+          ...(grammarAudited.reviewWarnings || []),
+          ...finalErrors,
+          `嚴格重生後仍有疑義：${reason}`,
+        ]);
+      } else {
+        grammarAudited = strictReplacement;
       }
-      grammarAudited = strictReplacement;
     }
 
     current = grammarAudited;
@@ -1301,9 +1389,13 @@ async function buildVocabularySection(
     }
     const { hard, soft } = splitValidationErrors(errors);
     if (hard.length) {
-      throw new Error(`Vocabulary Q${index + 1} failed final hard validation: ${hard.join("; ")}`);
+      console.warn(`Vocabulary Q${index + 1} requires teacher review: ${hard.join("; ")}`);
     }
-    return attachReviewMetadata(question, soft);
+    return attachReviewMetadata(question, [
+      ...(question.reviewWarnings || []),
+      ...hard,
+      ...soft,
+    ]);
   });
 
   // One efficient set-level semantic audit catches open-world ambiguity that a
