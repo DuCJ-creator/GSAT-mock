@@ -155,7 +155,8 @@ export default function WorksheetExport({ suite, onBack }: WorksheetExportProps)
 
     const serializedData = JSON.stringify(packEditableSuite(suite), null, 2)
       .replace(/<\/script/gi, "<\\/script")
-      .replace(/<!--/g, "<\\!--");
+      .replace(/\u2028/g, "\\u2028")
+      .replace(/\u2029/g, "\\u2029");
     
     const htmlContent = `<!DOCTYPE html>
 <html lang="zh-TW">
@@ -1739,15 +1740,10 @@ export default function WorksheetExport({ suite, onBack }: WorksheetExportProps)
     </div>
   </div>
 
-  <script id="runtime-payload" type="application/json">
-${serializedData}
-  </script>
-
   <script>
-    const payloadElement = document.getElementById("runtime-payload");
-    if (!payloadElement) {
-      throw new Error("Runtime payload was not found.");
-    }
+    // Compact editable data used by this page. The short keys are intentional:
+    // q=question, o=options, k=answer position (1=A, 2=B, 3=C, 4=D), x=explanation.
+    const __R = ${serializedData};
 
     function unpackEditableSuite(value) {
       if (Array.isArray(value)) return value.map(unpackEditableSuite);
@@ -1771,7 +1767,7 @@ ${serializedData}
       return result;
     }
 
-    const EXAM_DATA = unpackEditableSuite(JSON.parse(payloadElement.textContent || "{}"));
+    const EXAM_DATA = unpackEditableSuite(__R);
 
     // State object
     let state = {
@@ -1787,9 +1783,17 @@ ${serializedData}
 
     // Initialize application
     window.addEventListener('DOMContentLoaded', () => {
-      buildQuiz();
-      buildNav();
-      startStopwatch();
+      try {
+        buildQuiz();
+        buildNav();
+        startStopwatch();
+      } catch (error) {
+        console.error('Practice page initialization failed:', error);
+        const container = document.getElementById('quiz-container');
+        if (container) {
+          container.innerHTML = '<div style="padding:20px;border:1px solid #fecaca;background:#fff1f2;color:#991b1b;border-radius:16px;font-family:system-ui,sans-serif"><strong>題目載入失敗</strong><br>請重新下載此練習頁，或檢查頁面中的資料區是否仍為有效格式。</div>';
+        }
+      }
     });
 
     function startStopwatch() {
