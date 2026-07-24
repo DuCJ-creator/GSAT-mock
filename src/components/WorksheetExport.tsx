@@ -153,8 +153,13 @@ export default function WorksheetExport({ suite, onBack }: WorksheetExportProps)
       return value;
     };
 
+    // Keep the payload human-editable, but make it safe inside an HTML data block.
+    // Escaping every HTML-significant character prevents any question or
+    // explanation from accidentally terminating the block.
     const serializedData = JSON.stringify(packEditableSuite(suite), null, 2)
-      .replace(/<\/script/gi, "<\\/script")
+      .replace(/&/g, "\\u0026")
+      .replace(/</g, "\\u003c")
+      .replace(/>/g, "\\u003e")
       .replace(/\u2028/g, "\\u2028")
       .replace(/\u2029/g, "\\u2029");
     
@@ -1740,11 +1745,13 @@ export default function WorksheetExport({ suite, onBack }: WorksheetExportProps)
     </div>
   </div>
 
-  <script>
-    // Compact editable data used by this page. The short keys are intentional:
-    // q=question, o=options, k=answer position (1=A, 2=B, 3=C, 4=D), x=explanation.
-    const __R = ${serializedData};
+  <!-- Compact editable payload. Search for a question sentence to edit it.
+       q=question, o=options, k=answer position (1=A, 2=B, 3=C, 4=D), x=explanation. -->
+  <script id="runtime-payload" type="application/json">
+${serializedData}
+  </script>
 
+  <script>
     function unpackEditableSuite(value) {
       if (Array.isArray(value)) return value.map(unpackEditableSuite);
       if (!value || typeof value !== 'object') return value;
@@ -1767,7 +1774,9 @@ export default function WorksheetExport({ suite, onBack }: WorksheetExportProps)
       return result;
     }
 
-    const EXAM_DATA = unpackEditableSuite(__R);
+    const payloadNode = document.getElementById('runtime-payload');
+    if (!payloadNode) throw new Error('Missing runtime-payload data block.');
+    const EXAM_DATA = unpackEditableSuite(JSON.parse(payloadNode.textContent || '{}'));
 
     // State object
     let state = {
