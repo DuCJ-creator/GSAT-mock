@@ -49,11 +49,11 @@ export default function App() {
   const [loadingStepMsg, setLoadingStepMsg] = useState<string>("");
   const [generationError, setGenerationError] = useState<string | null>(null);
   const [session, setSession] = useState<PracticeSessionState>({
-    answers: { vocab: {}, cloze: {}, blankMatching: {}, reading: {} },
+    answers: { vocab: {}, reading: {} },
     submitted: false,
     startTime: 0
   });
-  const [currentSection, setCurrentSection] = useState<"vocab" | "cloze" | "matching" | "reading">("vocab");
+  const [currentSection, setCurrentSection] = useState<"vocab" | "reading">("vocab");
   const [studyHistory, setStudyHistory] = useState<ProgressReport[]>([]);
   const [activeReport, setActiveReport] = useState<ProgressReport | null>(null);
 
@@ -471,7 +471,7 @@ export default function App() {
       };
 
       setExamSuite(suite);
-      setSession({ answers: { vocab: {}, cloze: {}, blankMatching: {}, reading: {} }, submitted: false, startTime: Date.now() });
+      setSession({ answers: { vocab: {}, reading: {} }, submitted: false, startTime: Date.now() });
       if (suite.vocabQuestions && suite.vocabQuestions.length > 0) setCurrentSection("vocab");
       else if (suite.readingPassages && suite.readingPassages.length > 0) setCurrentSection("reading");
       setActiveTab("player");
@@ -490,8 +490,6 @@ export default function App() {
     const reportDetails: any[] = [];
     const summary = {
       vocab: { correct: 0, total: 0, score: 0 },
-      cloze: { correct: 0, total: 0, score: 0 },
-      blankMatching: { correct: 0, total: 0, score: 0 },
       reading: { correct: 0, total: 0, score: 0 },
       comprehensive: { correct: 0, total: 0, score: 0 }
     };
