@@ -53,10 +53,7 @@ export default function WorksheetExport({ suite, onBack }: WorksheetExportProps)
       });
     }
 
-    md += `
-
-========================================================================
-`;
+    md += `\n\n========================================================================\n`;
     md += `### ANSWER KEY & EXPLANATIONS (解答與詳解)\n`;
     md += `========================================================================\n\n`;
 
@@ -113,14 +110,49 @@ export default function WorksheetExport({ suite, onBack }: WorksheetExportProps)
   };
 
   const handleDownloadInteractiveHtml = () => {
-    // Keep the exported payload directly compatible with the existing runtime.
-    // Pretty-printed JSON remains easy for the teacher to edit in GitHub.
-    const serializedData = JSON.stringify(suite, null, 2)
-      .replace(/&/g, "\\u0026")
-      .replace(/</g, "\\u003c")
-      .replace(/>/g, "\\u003e")
-      .replace(/\u2028/g, "\\u2028")
-      .replace(/\u2029/g, "\\u2029");
+    // A deliberately low-profile, still-editable payload. This is not encryption:
+    // it only avoids exposing obvious field names such as `correctAnswer`.
+    const packEditableSuite = (value: unknown, parentKey = ""): unknown => {
+      if (Array.isArray(value)) {
+        return value.map((item) => packEditableSuite(item, parentKey));
+      }
+
+      if (value && typeof value === "object") {
+        const source = value as Record<string, unknown>;
+        const packed: Record<string, unknown> = {};
+        const aliases: Record<string, string> = {
+          vocabQuestions: "v",
+          readingPassages: "r",
+          question: "q",
+          options: "o",
+          correctAnswer: "k",
+          wordTested: "w",
+          answerText: "t",
+          explanation: "x",
+          title: "h",
+          passage: "p",
+          questions: "s",
+          level: "l"
+        };
+
+        Object.entries(source).forEach(([key, child]) => {
+          const outputKey = aliases[key] || key;
+          if (key === "correctAnswer" && typeof child === "string") {
+            const index = ["A", "B", "C", "D", "E", "F", "G", "H", "I", "J"].indexOf(child.toUpperCase());
+            packed[outputKey] = index >= 0 ? index + 1 : child;
+          } else {
+            packed[outputKey] = packEditableSuite(child, key);
+          }
+        });
+        return packed;
+      }
+
+      return value;
+    };
+
+    const serializedData = JSON.stringify(packEditableSuite(suite), null, 2)
+      .replace(/<\/script/gi, "<\\/script")
+      .replace(/<!--/g, "<\\!--");
     
     const htmlContent = `<!DOCTYPE html>
 <html lang="zh-TW">
@@ -310,9 +342,29 @@ ${serializedData}
       throw new Error("Runtime payload was not found.");
     }
 
-    const payloadElement = document.getElementById("runtime-payload");
-    if (!payloadElement) throw new Error("Missing runtime-payload data block.");
-    const EXAM_DATA = JSON.parse(payloadElement.textContent || "{}");
+    function unpackEditableSuite(value) {
+      if (Array.isArray(value)) return value.map(unpackEditableSuite);
+      if (!value || typeof value !== 'object') return value;
+
+      const aliases = {
+        v: 'vocabQuestions', r: 'readingPassages', q: 'question', o: 'options',
+        k: 'correctAnswer', w: 'wordTested', t: 'answerText',
+        x: 'explanation', h: 'title', p: 'passage',
+        s: 'questions', l: 'level'
+      };
+      const result = {};
+      Object.entries(value).forEach(([key, child]) => {
+        const restoredKey = aliases[key] || key;
+        if (key === 'k' && Number.isInteger(child) && child >= 1 && child <= 10) {
+          result[restoredKey] = 'ABCDEFGHIJ'[child - 1];
+        } else {
+          result[restoredKey] = unpackEditableSuite(child);
+        }
+      });
+      return result;
+    }
+
+    const EXAM_DATA = unpackEditableSuite(JSON.parse(payloadElement.textContent || "{}"));
 
     // State object
     let state = {
@@ -536,8 +588,9 @@ ${serializedData}
 
         partCounter++;
       }
+    }
 
-    // Handles single selection for Part I and II multiple-choice questions
+    // Handles single selection for vocabulary and reading questions
     function selectAnswer(section, questionId, letter) {
       if (state.submitted) return;
       
@@ -747,11 +800,9 @@ ${serializedData}
         const inputs = document.querySelectorAll('.choice-btn, select, input');
         inputs.forEach(i => i.removeAttribute('disabled'));
 
-
         // Remove selections
         const btns = document.querySelectorAll('.choice-btn');
         btns.forEach(b => b.classList.remove('choice-selected', 'bg-red-100', 'border-red-400', 'text-red-950', 'bg-green-100', 'border-green-500', 'text-green-950', 'ring-2', 'ring-green-600'));
-
 
         // Hide results
         document.getElementById('results-dashboard').classList.add('hidden');
