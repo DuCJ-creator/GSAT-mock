@@ -243,6 +243,65 @@ function hasObviousWordFamilyCluster(options: string[]): boolean {
   return false;
 }
 
+function optionWords(value: unknown): string[] {
+  return stripOptionLabel(value)
+    .toLowerCase()
+    .replace(/[’']/g, "")
+    .replace(/[^a-z\s-]/g, " ")
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
+}
+
+/**
+ * Rejects option sets such as "horizontal rifle / naive rifle / rifle / compact rifle".
+ * These do not test four different lexical items; they merely repeat one headword
+ * with superficial modifiers.
+ */
+function repeatedOptionHeadword(options: string[]): string | null {
+  const heads = options.map((option) => optionWords(option).at(-1) || "").filter(Boolean);
+  const counts = new Map<string, number>();
+  for (const head of heads) counts.set(head, (counts.get(head) || 0) + 1);
+  for (const [head, count] of counts) {
+    if (count >= 3) return head;
+  }
+  return null;
+}
+
+function normalizeComparableForm(value: unknown): string {
+  return stripOptionLabel(value).toLowerCase().replace(/[^a-z-]/g, "");
+}
+
+/**
+ * Deterministic checks for high-confidence surface-form errors. These rules are
+ * intentionally conservative: they only reject constructions whose grammar is
+ * explicit in the stem, such as "to ____" or "must ____" requiring a base verb.
+ */
+function validateExplicitVocabularyMorphology(question: ExamQuestion): string[] {
+  const errors: string[] = [];
+  const answerIndex = LETTERS.indexOf(question.correctAnswer);
+  const answer = normalizeComparableForm(question.options[answerIndex]);
+  const lemma = normalizeComparableForm(question.wordTested || "");
+  const stem = String(question.question || "").toLowerCase();
+
+  const requiresBaseVerb =
+    /(?:\bto|\bcan|\bcould|\bmay|\bmight|\bmust|\bshall|\bshould|\bwill|\bwould)\s+_{3,}/i.test(stem);
+
+  if (requiresBaseVerb && answer) {
+    const looksInflected =
+      /(?:ing|ed)$/.test(answer) ||
+      (/(?:s|es)$/.test(answer) && !/(?:ss|us|is)$/.test(answer));
+
+    // When wordTested is available, the keyed surface form must be the dictionary
+    // form in an explicit base-verb slot. This catches bulge -> bulges after "to".
+    if ((lemma && answer !== lemma) || (!lemma && looksInflected)) {
+      errors.push(`the keyed option "${stripOptionLabel(question.options[answerIndex])}" is not a base verb in an explicit base-form slot`);
+    }
+  }
+
+  return errors;
+}
+
 function hasAmbiguityAdmission(explanation: string): boolean {
   const patterns = [
     /(?:也可以|亦可|也合理|同樣合理|可以成立|尚可|並非錯誤|不是完全錯誤)/,
@@ -283,6 +342,11 @@ function validateQuestion(question: ExamQuestion, kind: "vocab" | "reading"): st
     if (hasObviousWordFamilyCluster(question.options)) {
       errors.push("the options form a word-family exercise instead of a vocabulary-choice item");
     }
+    const repeatedHead = repeatedOptionHeadword(question.options);
+    if (repeatedHead) {
+      errors.push(`three or more options repeat the same headword "${repeatedHead}"`);
+    }
+    errors.push(...validateExplicitVocabularyMorphology(question));
   }
 
   return errors;
@@ -293,7 +357,6 @@ function splitValidationErrors(errors: string[]): { hard: string[]; soft: string
   const softPatterns = [
     /explanation admits that another option could fit/i,
     /suite-wide repeated options/i,
-    /word-family exercise/i,
   ];
   const soft: string[] = [];
   const hard: string[] = [];
@@ -1138,11 +1201,11 @@ async function buildVocabularySection(
       current = replacement;
     }
 
-    // Mandatory final morphology audit. This catches cases such as
-    // embarrass -> embarrassed after "felt completely" even when an earlier
-    // semantic reviewer overlooked the surface form.
+    // Mandatory final morphology audit. A question is not allowed into the
+    // returned paper while any hard deterministic error remains.
     let grammarAudited = current;
-    for (let grammarAttempt = 0; grammarAttempt < 2; grammarAttempt++) {
+    let finalErrors: string[] = [];
+    for (let grammarAttempt = 0; grammarAttempt < 3; grammarAttempt++) {
       try {
         const morphologyPlan = await analyzeMorphologyPlan(grammarAudited, targetWord);
         grammarAudited = await grammarAuditVocabularyQuestion(
@@ -1151,18 +1214,70 @@ async function buildVocabularySection(
           selectedLevel,
           morphologyPlan,
         );
-        const grammarErrors = validateQuestion(grammarAudited, "vocab");
+        finalErrors = validateQuestion(grammarAudited, "vocab");
         if (!sameLemma(grammarAudited.wordTested, targetWord.word)) {
-          grammarErrors.push(`wordTested must remain the assigned target "${targetWord.word}"`);
+          finalErrors.push(`wordTested must remain the assigned target "${targetWord.word}"`);
         }
-        if (grammarErrors.length === 0) break;
+        if (finalErrors.length === 0) break;
       } catch (error) {
         lastError = error;
         console.warn(`Vocabulary Q${index + 1} grammar audit ${grammarAttempt + 1} failed:`, error);
       }
     }
-    current = grammarAudited;
 
+    // If repair still leaves an obvious morphology or option-design defect,
+    // discard the item and regenerate it instead of downgrading it to a warning.
+    if (finalErrors.length > 0) {
+      let strictReplacement: ExamQuestion | null = null;
+      for (let attempt = 0; attempt < 5; attempt++) {
+        try {
+          let fresh = await generateOneVocabularyQuestion(
+            targetWord,
+            vocabList,
+            selectedLevel,
+            reviewed.map((q) => q.question),
+            enforceSuiteWideOptionUniqueness ? reviewed : [],
+          );
+          let freshErrors = validateQuestion(fresh, "vocab");
+          if (!sameLemma(fresh.wordTested, targetWord.word)) {
+            freshErrors.push(`wordTested must remain the assigned target "${targetWord.word}"`);
+          }
+          fresh = await repairVocabularyQuestion(
+            fresh,
+            freshErrors,
+            targetWord,
+            vocabList,
+            selectedLevel,
+            enforceSuiteWideOptionUniqueness ? reviewed : [],
+          );
+          const morphologyPlan = await analyzeMorphologyPlan(fresh, targetWord);
+          fresh = await grammarAuditVocabularyQuestion(fresh, targetWord, selectedLevel, morphologyPlan);
+
+          const replacementErrors = validateQuestion(fresh, "vocab");
+          if (!sameLemma(fresh.wordTested, targetWord.word)) {
+            replacementErrors.push(`wordTested must remain the assigned target "${targetWord.word}"`);
+          }
+          const { hard } = splitValidationErrors(replacementErrors);
+          if (hard.length === 0) {
+            strictReplacement = fresh;
+            break;
+          }
+          lastError = new Error(hard.join("; "));
+        } catch (error) {
+          lastError = error;
+          console.warn(`Vocabulary Q${index + 1} strict replacement ${attempt + 1} failed:`, error);
+        }
+      }
+
+      if (!strictReplacement) {
+        throw lastError || new Error(
+          `Vocabulary question ${index + 1} still contains a hard grammar or option-design error after strict regeneration.`,
+        );
+      }
+      grammarAudited = strictReplacement;
+    }
+
+    current = grammarAudited;
     reviewed.push(current);
   }
 
@@ -1186,11 +1301,9 @@ async function buildVocabularySection(
     }
     const { hard, soft } = splitValidationErrors(errors);
     if (hard.length) {
-      // Keep the usable item instead of discarding the whole paper. Structural
-      // failures remain visible as manual-review warnings for teacher editing.
-      console.warn(`Vocabulary Q${index + 1} requires manual review: ${hard.join("; ")}`);
+      throw new Error(`Vocabulary Q${index + 1} failed final hard validation: ${hard.join("; ")}`);
     }
-    return attachReviewMetadata(question, [...hard, ...soft]);
+    return attachReviewMetadata(question, soft);
   });
 
   // One efficient set-level semantic audit catches open-world ambiguity that a
