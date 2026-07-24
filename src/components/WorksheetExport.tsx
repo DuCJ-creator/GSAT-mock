@@ -4,7 +4,7 @@
  */
 
 import React, { useState } from "react";
-import { Copy, Printer, FileText, CheckSquare, Eye, ArrowLeft, Download, FileSpreadsheet, Laptop } from "lucide-react";
+import { Copy, Printer, CheckSquare, ArrowLeft, Download, Laptop } from "lucide-react";
 import { GeneratedExamSuite } from "../types";
 
 interface WorksheetExportProps {
@@ -53,27 +53,10 @@ export default function WorksheetExport({ suite, onBack }: WorksheetExportProps)
       });
     }
 
-    // Part III: Cloze
-    if (suite.clozeSuite) {
-      md += `### Part III: Cloze Test (學測綜合測驗)\n`;
-      md += `*Directions: Read the passage and choose the best option for each blank.*\n\n`;
-      md += `${suite.clozeSuite.passage}\n\n`;
-      suite.clozeSuite.questions.forEach((q) => {
-        md += `(   ) (${q.gapNumber}) ${q.options.join("   ")}\n`;
-      });
-      md += `\n\n`;
-    }
+    md += `
 
-    // Part IV: Matching
-    if (suite.blankMatchingSuite) {
-      md += `### Part IV: Blank Matching (學測文意選填)\n`;
-      md += `*Directions: Choose the correct word from the options below to fill in each blank matching slot in the passage.*\n\n`;
-      md += `Options:\n`;
-      md += `   ${suite.blankMatchingSuite.options.join("   ")}\n\n`;
-      md += `${suite.blankMatchingSuite.passage}\n\n`;
-    }
-
-    md += `\n\n========================================================================\n`;
+========================================================================
+`;
     md += `### ANSWER KEY & EXPLANATIONS (解答與詳解)\n`;
     md += `========================================================================\n\n`;
 
@@ -100,29 +83,6 @@ export default function WorksheetExport({ suite, onBack }: WorksheetExportProps)
         });
         md += `\n`;
       });
-    }
-
-    if (suite.clozeSuite) {
-      md += `#### Part III Cloze Solution:\n`;
-      suite.clozeSuite.questions.forEach((q) => {
-        md += `Gap (${q.gapNumber}) Correct Answer: (${q.correctAnswer}) [Category: ${q.category}]\n`;
-        if (includeExplanations) {
-          md += `   解析: ${q.explanation}\n\n`;
-        }
-      });
-      md += `\n`;
-    }
-
-    if (suite.blankMatchingSuite) {
-      md += `#### Part IV Blank Matching Solution:\n`;
-      md += `Blanks (1) through (10) Answers:\n`;
-      suite.blankMatchingSuite.answers.forEach((ans, idx) => {
-        md += `(${idx + 1}): ${ans}  (Word: ${suite.blankMatchingSuite!.options.find(o => o.startsWith(`(${ans})`)) || ans})\n`;
-        if (includeExplanations) {
-          md += `     解析: ${suite.blankMatchingSuite!.explanations[idx]}\n`;
-        }
-      });
-      md += `\n`;
     }
 
     return md;
@@ -153,10 +113,47 @@ export default function WorksheetExport({ suite, onBack }: WorksheetExportProps)
   };
 
   const handleDownloadInteractiveHtml = () => {
-    // Keep the embedded exam data human-readable so teachers can edit the
-    // downloaded HTML directly in GitHub or any text editor.
-    // Escape only sequences that could prematurely close the JSON script block.
-    const serializedData = JSON.stringify(suite, null, 2)
+    // A deliberately low-profile, still-editable payload. This is not encryption:
+    // it only avoids exposing obvious field names such as `correctAnswer`.
+    const packEditableSuite = (value: unknown, parentKey = ""): unknown => {
+      if (Array.isArray(value)) {
+        return value.map((item) => packEditableSuite(item, parentKey));
+      }
+
+      if (value && typeof value === "object") {
+        const source = value as Record<string, unknown>;
+        const packed: Record<string, unknown> = {};
+        const aliases: Record<string, string> = {
+          vocabQuestions: "v",
+          readingPassages: "r",
+          question: "q",
+          options: "o",
+          correctAnswer: "k",
+          wordTested: "w",
+          answerText: "t",
+          explanation: "x",
+          title: "h",
+          passage: "p",
+          questions: "s",
+          level: "l"
+        };
+
+        Object.entries(source).forEach(([key, child]) => {
+          const outputKey = aliases[key] || key;
+          if (key === "correctAnswer" && typeof child === "string") {
+            const index = ["A", "B", "C", "D", "E", "F", "G", "H", "I", "J"].indexOf(child.toUpperCase());
+            packed[outputKey] = index >= 0 ? index + 1 : child;
+          } else {
+            packed[outputKey] = packEditableSuite(child, key);
+          }
+        });
+        return packed;
+      }
+
+      return value;
+    };
+
+    const serializedData = JSON.stringify(packEditableSuite(suite), null, 2)
       .replace(/<\/script/gi, "<\\/script")
       .replace(/<!--/g, "<\\!--");
     
@@ -338,31 +335,45 @@ export default function WorksheetExport({ suite, onBack }: WorksheetExportProps)
     </div>
   </div>
 
-  <!-- =====================================================
-       TEACHER EDIT AREA / 教師人工編輯區
-       You may directly edit questions, options, correctAnswer, wordTested,
-       answerText, explanations, passages, and other exam content below.
-       Keep the JSON syntax valid and do not remove the surrounding script tag.
-  ====================================================== -->
-  <script id="exam-data" type="application/json">
+  <script id="runtime-payload" type="application/json">
 ${serializedData}
   </script>
 
   <script>
-    // Load the human-readable embedded exam data.
-    const examDataElement = document.getElementById("exam-data");
-    if (!examDataElement) {
-      throw new Error("Embedded exam data was not found.");
+    const payloadElement = document.getElementById("runtime-payload");
+    if (!payloadElement) {
+      throw new Error("Runtime payload was not found.");
     }
-    const EXAM_DATA = JSON.parse(examDataElement.textContent || "{}");
+
+    function unpackEditableSuite(value) {
+      if (Array.isArray(value)) return value.map(unpackEditableSuite);
+      if (!value || typeof value !== 'object') return value;
+
+      const aliases = {
+        v: 'vocabQuestions', r: 'readingPassages', q: 'question', o: 'options',
+        k: 'correctAnswer', w: 'wordTested', t: 'answerText',
+        x: 'explanation', e: 'explanations', h: 'title', p: 'passage',
+        s: 'questions', l: 'level', g: 'gapNumber', y: 'category', a: 'answers'
+      };
+      const result = {};
+      Object.entries(value).forEach(([key, child]) => {
+        const restoredKey = aliases[key] || key;
+        if (key === 'k' && Number.isInteger(child) && child >= 1 && child <= 10) {
+          result[restoredKey] = 'ABCDEFGHIJ'[child - 1];
+        } else {
+          result[restoredKey] = unpackEditableSuite(child);
+        }
+      });
+      return result;
+    }
+
+    const EXAM_DATA = unpackEditableSuite(JSON.parse(payloadElement.textContent || "{}"));
 
     // State object
     let state = {
       answers: {
         vocab: {},       // idx -> "A"|"B"|"C"|"D"
-        reading: {},     // pIdx_qIdx -> "A"|"B"|"C"|"D"
-        cloze: {},       // idx -> "A"|"B"|"C"|"D"
-        matching: {}     // idx -> chosen letter
+        reading: {}      // pIdx_qIdx -> "A"|"B"|"C"|"D"
       },
       submitted: false,
       startTime: Date.now(),
@@ -410,14 +421,6 @@ ${serializedData}
         createNavButton(navContainer, 'section-reading', \`Part \${romanize(idx)}: Reading Comp\`, () => countAnswered('reading'), totalQ);
         idx++;
       }
-      if (EXAM_DATA.clozeSuite && EXAM_DATA.clozeSuite.questions.length > 0) {
-        createNavButton(navContainer, 'section-cloze', \`Part \${romanize(idx)}: Cloze Test\`, () => countAnswered('cloze'), EXAM_DATA.clozeSuite.questions.length);
-        idx++;
-      }
-      if (EXAM_DATA.blankMatchingSuite) {
-        createNavButton(navContainer, 'section-matching', \`Part \${romanize(idx)}: Blank Matching\`, () => countAnswered('matching'), 10);
-        idx++;
-      }
     }
 
     function romanize(num) {
@@ -463,16 +466,6 @@ ${serializedData}
         let totalQ = 0;
         EXAM_DATA.readingPassages.forEach(p => totalQ += p.questions.length);
         if (counter) counter.innerText = \`\${countAnswered('reading')}/\${totalQ}\`;
-        idx++;
-      }
-      if (EXAM_DATA.clozeSuite && EXAM_DATA.clozeSuite.questions.length > 0) {
-        const counter = document.getElementById('nav-counter-section-cloze');
-        if (counter) counter.innerText = \`\${countAnswered('cloze')}/\${EXAM_DATA.clozeSuite.questions.length}\`;
-        idx++;
-      }
-      if (EXAM_DATA.blankMatchingSuite) {
-        const counter = document.getElementById('nav-counter-section-matching');
-        if (counter) counter.innerText = \`\${countAnswered('matching')}/10\`;
         idx++;
       }
     }
@@ -599,169 +592,7 @@ ${serializedData}
         partCounter++;
       }
 
-      // Part 3: Cloze Test Questions
-      if (EXAM_DATA.clozeSuite && EXAM_DATA.clozeSuite.questions.length > 0) {
-        const section = document.createElement('section');
-        section.id = "section-cloze";
-        section.className = "bg-white border border-stone-200 rounded-3xl p-6 md:p-8 shadow-sm space-y-6";
-        
-        section.innerHTML = \`
-          <div class="border-l-4 border-stone-800 pl-3">
-            <h2 class="text-lg font-bold text-stone-900 uppercase">Part \${romanize(partCounter)}: Cloze Test (學測綜合測驗)</h2>
-            <p class="text-xs text-stone-500 italic mt-0.5">Directions: For each blank, choose the most appropriate word, conjugation, preposition, or collocation phrase.</p>
-          </div>
-          
-          <div class="bg-stone-50 border border-stone-200 rounded-2xl p-5 md:p-6 text-sm md:text-base leading-loose text-stone-900 serif-font whitespace-pre-wrap">\${EXAM_DATA.clozeSuite.passage}</div>
-          
-          <div class="space-y-4 pt-4" id="cloze-questions-list"></div>
-        \`;
-        container.appendChild(section);
-
-        const list = document.getElementById('cloze-questions-list');
-        EXAM_DATA.clozeSuite.questions.forEach((q, qIdx) => {
-          const qBlock = document.createElement('div');
-          qBlock.className = "p-4 rounded-xl hover:bg-stone-50/50 transition border border-transparent";
-          qBlock.id = \`cloze-q-block-\${qIdx}\`;
-          
-          let optionsHtml = '';
-          q.options.forEach((opt, optIdx) => {
-            const letter = ["A", "B", "C", "D"][optIdx];
-            optionsHtml += \`
-              <button onclick="selectAnswer('cloze', '\${qIdx}', '\${letter}')" id="cloze-btn-\${qIdx}-\${letter}" class="choice-btn text-left px-4 py-2 text-xs md:text-sm border border-stone-200 rounded-xl bg-white text-stone-700 font-medium">
-                \${opt}
-              </button>
-            \`;
-          });
-
-          qBlock.innerHTML = \`
-            <div class="text-sm md:text-base leading-relaxed text-stone-900 font-semibold flex items-center gap-2 font-serif">
-              <span class="inline-block px-2 py-0.5 bg-stone-100 text-stone-800 rounded font-bold font-mono text-xs">Blank (\${q.gapNumber})</span>
-              Choice selection:
-            </div>
-            <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-3">
-              \${optionsHtml}
-            </div>
-            <div id="cloze-expl-\${qIdx}" class="hidden mt-4 p-4 rounded-xl border"></div>
-          \`;
-          list.appendChild(qBlock);
-        });
-
-        partCounter++;
-      }
-
-      // Part 4: Blank Matching
-      if (EXAM_DATA.blankMatchingSuite) {
-        const section = document.createElement('section');
-        section.id = "section-matching";
-        section.className = "bg-white border border-stone-200 rounded-3xl p-6 md:p-8 shadow-sm space-y-6";
-        
-        let optionTableHtml = '';
-        EXAM_DATA.blankMatchingSuite.options.forEach((opt, idx) => {
-          optionTableHtml += \`
-            <div class="bg-stone-50 border border-stone-200 p-2 rounded-lg shadow-sm text-center text-xs md:text-sm font-mono font-semibold text-stone-800">
-              \${opt}
-            </div>
-          \`;
-        });
-
-        section.innerHTML = \`
-          <div class="border-l-4 border-stone-800 pl-3">
-            <h2 class="text-lg font-bold text-stone-900 uppercase">Part \${romanize(partCounter)}: Blank Matching (學測文意選填)</h2>
-            <p class="text-xs text-stone-500 italic mt-0.5">Directions: Match the ten candidate words below to fill in the ten gaps in the passage. Use each candidate exactly once.</p>
-          </div>
-
-          <div class="bg-stone-100 border border-stone-200 rounded-2xl p-4 md:p-5">
-            <span class="text-xs uppercase tracking-wider font-mono text-stone-500 block mb-3 font-bold text-center">Candidate Option Table</span>
-            <div class="grid grid-cols-2 sm:grid-cols-5 gap-2">
-              \${optionTableHtml}
-            </div>
-          </div>
-
-          <div class="relative bg-stone-50 border border-stone-200 rounded-2xl p-5 md:p-6 text-sm md:text-base leading-loose text-stone-900 serif-font whitespace-pre-wrap">
-            <div class="absolute top-3 right-3 bg-stone-200 text-stone-800 text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 rounded">Matching Passage</div>
-            \${renderMatchingPassage(EXAM_DATA.blankMatchingSuite.passage)}
-          </div>
-
-          <div class="border-t border-stone-200 pt-6">
-            <h4 class="text-xs font-bold uppercase tracking-wider text-stone-400 font-mono mb-4">Compact Matching Answer Pad</h4>
-            <div class="grid grid-cols-2 sm:grid-cols-5 gap-4" id="matching-answer-pad"></div>
-          </div>
-        \`;
-        container.appendChild(section);
-
-        // Build compact answers pad
-        const pad = document.getElementById('matching-answer-pad');
-        for (let i = 0; i < 10; i++) {
-          const blankNum = i + 1;
-          const selectBlock = document.createElement('div');
-          selectBlock.className = "flex flex-col gap-1";
-          
-          let selectOptions = \`<option value="">Select...</option>\`;
-          ["A", "B", "C", "D", "E", "F", "G", "H", "I", "J"].forEach(letter => {
-            const correspondingWord = EXAM_DATA.blankMatchingSuite.options.find(o => o.startsWith(\`(\${letter})\`)) || letter;
-            selectOptions += \`<option value="\${letter}">(\${letter}) \${correspondingWord.replace(\`(\${letter})\`, '').trim()}</option>\`;
-          });
-
-          selectBlock.innerHTML = \`
-            <label class="text-[11px] font-bold font-mono text-stone-500">Blank (\${blankNum})</label>
-            <select onchange="selectMatchingAnswer('\${i}', this.value)" id="matching-select-\${i}" class="w-full px-2 py-2 border border-stone-200 rounded-xl bg-white text-xs md:text-sm focus:outline-none focus:ring-2 focus:ring-stone-500 font-semibold">
-              \${selectOptions}
-            </select>
-            <div id="matching-expl-\${i}" class="hidden mt-2 p-3 rounded-lg border text-xs"></div>
-          \`;
-          pad.appendChild(selectBlock);
-        }
-      }
-    }
-
-    // Replace the blanks (1) through (10) in the text with inline drop-down selectors
-    function renderMatchingPassage(passageText) {
-      let html = passageText;
-      for (let i = 1; i <= 10; i++) {
-        // Build a beautiful select dropdown for inline matching
-        let selectOptions = \`<option value="">(\${i}) ?</option>\`;
-        ["A", "B", "C", "D", "E", "F", "G", "H", "I", "J"].forEach(letter => {
-          const correspondingWord = EXAM_DATA.blankMatchingSuite.options.find(o => o.startsWith(\`(\${letter})\`)) || letter;
-          selectOptions += \`<option value="\${letter}">\${letter}</option>\`;
-        });
-        
-        const inlineSelect = \`<select onchange="syncMatchingSelect('\${i - 1}', this.value)" id="inline-matching-select-\${i - 1}" class="inline-block mx-1.5 border border-amber-800/20 rounded bg-amber-50/50 py-0.5 px-1.5 font-bold font-mono text-xs focus:ring-2 focus:ring-amber-500 text-stone-800 transition shadow-sm">\${selectOptions}</select>\`;
-        // Replace occurrences of gap like (1), (2), (3)... with the selector
-        const regex = new RegExp(\`\\\\(\${i}\\\\)\`, 'g');
-        html = html.replace(regex, inlineSelect);
-      }
-      return html;
-    }
-
-    function syncMatchingSelect(blankIdx, val) {
-      document.getElementById(\`matching-select-\${blankIdx}\`).value = val;
-      state.answers.matching[blankIdx] = val;
-      updateNavCounters();
-      updateInlineSelectStyles();
-    }
-
-    function selectMatchingAnswer(blankIdx, val) {
-      document.getElementById(\`inline-matching-select-\${blankIdx}\`).value = val;
-      state.answers.matching[blankIdx] = val;
-      updateNavCounters();
-      updateInlineSelectStyles();
-    }
-
-    function updateInlineSelectStyles() {
-      for (let i = 0; i < 10; i++) {
-        const inlineSel = document.getElementById(\`inline-matching-select-\${i}\`);
-        if (!inlineSel) continue;
-        if (inlineSel.value !== "") {
-          inlineSel.classList.remove('bg-amber-50/50', 'border-amber-800/20');
-          inlineSel.classList.add('bg-amber-100', 'border-amber-800', 'text-amber-950');
-        } else {
-          inlineSel.classList.add('bg-amber-50/50', 'border-amber-800/20');
-          inlineSel.classList.remove('bg-amber-100', 'border-amber-800', 'text-amber-950');
-        }
-      }
-    }
-
-    // Handles single selection for Part I, II, and III multiple-choice questions
+    // Handles single selection for Part I and II multiple-choice questions
     function selectAnswer(section, questionId, letter) {
       if (state.submitted) return;
       
@@ -809,12 +640,6 @@ ${serializedData}
         let totalQ = 0;
         EXAM_DATA.readingPassages.forEach(p => totalQ += p.questions.length);
         totalEmpty += (totalQ - countAnswered('reading'));
-      }
-      if (EXAM_DATA.clozeSuite) {
-        totalEmpty += (EXAM_DATA.clozeSuite.questions.length - countAnswered('cloze'));
-      }
-      if (EXAM_DATA.blankMatchingSuite) {
-        totalEmpty += (10 - countAnswered('matching'));
       }
 
       return totalEmpty;
@@ -928,82 +753,6 @@ ${serializedData}
         });
       }
 
-      // Part III: Cloze Evaluation
-      if (EXAM_DATA.clozeSuite) {
-        EXAM_DATA.clozeSuite.questions.forEach((q, qIdx) => {
-          totalQuestions++;
-          const userAns = state.answers.cloze[qIdx] || "";
-          const isCorrect = userAns === q.correctAnswer;
-          if (isCorrect) correctCount++;
-
-          const block = document.getElementById(\`cloze-q-block-\${qIdx}\`);
-          const explBlock = document.getElementById(\`cloze-expl-\${qIdx}\`);
-
-          if (isCorrect) {
-            block.classList.add('bg-green-50/50', 'border-green-300');
-          } else {
-            block.classList.add('bg-red-50/50', 'border-red-200');
-            if (userAns) {
-              const wrongBtn = document.getElementById(\`cloze-btn-\${qIdx}-\${userAns}\`);
-              if (wrongBtn) wrongBtn.classList.add('bg-red-100', 'border-red-400', 'text-red-950');
-            }
-          }
-
-          const correctBtn = document.getElementById(\`cloze-btn-\${qIdx}-\${q.correctAnswer}\`);
-          if (correctBtn) {
-            correctBtn.classList.add('bg-green-100', 'border-green-500', 'text-green-950', 'ring-2', 'ring-green-600');
-          }
-
-          explBlock.classList.remove('hidden');
-          explBlock.classList.add(isCorrect ? 'bg-green-50/20' : 'bg-stone-50/80', isCorrect ? 'border-green-200/50' : 'border-stone-200');
-          explBlock.innerHTML = \`
-            <div class="flex items-center gap-2 mb-1 font-sans text-xs">
-              \${isCorrect 
-                ? '<span class="text-green-700 font-bold flex items-center gap-1">✅ 正確 Correct!</span>' 
-                : \`<span class="text-red-700 font-bold flex items-center gap-1">❌ 錯誤 Incorrect • 正確答案是 (\${q.correctAnswer})</span>\`}
-            </div>
-            <p class="text-xs text-stone-500 font-mono">Tested Category: <span class="uppercase font-bold text-amber-900">\${q.category}</span></p>
-            <p class="text-xs text-stone-700 mt-1.5 leading-relaxed font-sans"><strong class="text-stone-900">【詳解】</strong> \${q.explanation}</p>
-          \`;
-        });
-      }
-
-      // Part IV: Blank Matching Evaluation
-      if (EXAM_DATA.blankMatchingSuite) {
-        for (let i = 0; i < 10; i++) {
-          totalQuestions++;
-          const userAns = state.answers.matching[i] || "";
-          const correctAns = EXAM_DATA.blankMatchingSuite.answers[i];
-          const isCorrect = userAns === correctAns;
-          if (isCorrect) correctCount++;
-
-          const selectEl = document.getElementById(\`matching-select-\${i}\`);
-          const inlineEl = document.getElementById(\`inline-matching-select-\${i}\`);
-          const explBlock = document.getElementById(\`matching-expl-\${i}\`);
-
-          if (isCorrect) {
-            selectEl.classList.add('border-green-500', 'bg-green-50', 'text-green-900');
-            if (inlineEl) {
-              inlineEl.classList.remove('bg-amber-100', 'border-amber-800', 'text-amber-950');
-              inlineEl.classList.add('bg-green-100', 'border-green-600', 'text-green-950');
-            }
-          } else {
-            selectEl.classList.add('border-red-400', 'bg-red-50', 'text-red-900');
-            if (inlineEl) {
-              inlineEl.classList.remove('bg-amber-100', 'border-amber-800', 'text-amber-950');
-              inlineEl.classList.add('bg-red-100', 'border-red-500', 'text-red-950');
-            }
-          }
-
-          explBlock.classList.remove('hidden');
-          explBlock.className = \`mt-2 p-3 rounded-xl border text-xs leading-normal \${isCorrect ? 'bg-green-50/20 border-green-200/50 text-green-950' : 'bg-red-50/10 border-red-200/40 text-stone-700'}\`;
-          explBlock.innerHTML = \`
-            <div class="font-bold mb-1 font-sans text-xs">\${isCorrect ? '✅ 正確' : \`❌ 錯誤 (正解: \${correctAns})\`}</div>
-            <p class="text-stone-600 font-sans"><strong class="text-stone-800">【詳解】</strong> \${EXAM_DATA.blankMatchingSuite.explanations[i]}</p>
-          \`;
-        }
-      }
-
       // Compute grade percentage
       const percentage = Math.round((correctCount / totalQuestions) * 100);
       document.getElementById('score-percentage').innerText = \`\${percentage}%\`;
@@ -1045,7 +794,7 @@ ${serializedData}
 
     function resetPractice() {
       if (confirm("Are you sure you want to restart the practice? This will clear all your answers and reset the stopwatch.")) {
-        state.answers = { vocab: {}, reading: {}, cloze: {}, matching: {} };
+        state.answers = { vocab: {}, reading: {} };
         state.submitted = false;
         state.elapsedSeconds = 0;
         
@@ -1053,16 +802,11 @@ ${serializedData}
         const inputs = document.querySelectorAll('.choice-btn, select, input');
         inputs.forEach(i => i.removeAttribute('disabled'));
 
-        // Clear all select values
-        const selects = document.querySelectorAll('select');
-        selects.forEach(s => s.value = "");
 
         // Remove selections
         const btns = document.querySelectorAll('.choice-btn');
         btns.forEach(b => b.classList.remove('choice-selected', 'bg-red-100', 'border-red-400', 'text-red-950', 'bg-green-100', 'border-green-500', 'text-green-950', 'ring-2', 'ring-green-600'));
 
-        // Reset inline select styles
-        updateInlineSelectStyles();
 
         // Hide results
         document.getElementById('results-dashboard').classList.add('hidden');
@@ -1321,63 +1065,6 @@ ${serializedData}
               </div>
             )}
 
-            {/* Part III: Cloze */}
-            {suite.clozeSuite && (
-              <div id="print-cloze-section" className="space-y-4">
-                <div className="border-l-4 border-stone-800 pl-3">
-                  <h2 style={{ fontSize: "16px", fontWeight: "bold" }} className="text-stone-900 uppercase">Part III: Cloze Test (學測綜合測驗)</h2>
-                  <p style={{ fontSize: "12px" }} className="text-stone-500 italic">Directions: For each blank, choose the most appropriate word, conjugation, preposition, or collocation phrase.</p>
-                </div>
-
-                <h3 style={{ fontSize: "14px", fontWeight: "bold" }} className="text-stone-950 mt-4 mb-1">Cloze Passage</h3>
-                <div style={{ fontSize: "12px" }} className="bg-stone-50 border border-stone-200 rounded-xl p-5 md:p-6 leading-loose text-stone-900 whitespace-pre-wrap">
-                  {suite.clozeSuite.passage}
-                </div>
-
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
-                  {suite.clozeSuite.questions.map((q, idx) => (
-                    <div key={idx} id={`print-cloze-q-${idx}`} style={{ fontSize: "12px" }} className="border-b border-dashed border-stone-100 pb-2">
-                      <span className="font-bold text-stone-900">
-                        <span className="font-mono font-bold mr-2 text-stone-800">( &nbsp; &nbsp; )</span>
-                        Option ({q.gapNumber}):
-                      </span>
-                      <div className="flex flex-wrap gap-x-3 gap-y-1 mt-1 text-stone-700">
-                        {q.options.map((opt, optIdx) => (
-                          <span key={optIdx} className="whitespace-nowrap">{opt}</span>
-                        ))}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {/* Part IV: Blank Matching */}
-            {suite.blankMatchingSuite && (
-              <div id="print-matching-section" className="space-y-4">
-                <div className="border-l-4 border-stone-800 pl-3">
-                  <h2 style={{ fontSize: "16px", fontWeight: "bold" }} className="text-stone-900 uppercase">Part IV: Blank Matching (學測文意選填)</h2>
-                  <p style={{ fontSize: "12px" }} className="text-stone-500 italic">Directions: Match the ten candidate words below to fill in the ten gaps in the passage. Use each candidate exactly once.</p>
-                </div>
-
-                {/* Highly deceptive options grid */}
-                <div className="bg-stone-100 border border-stone-200 rounded-xl p-4 text-center mt-4">
-                  <span style={{ fontSize: "12px" }} className="uppercase tracking-wider font-mono text-stone-500 block mb-2 font-bold">Candidate Option Table</span>
-                  <div className="grid grid-cols-5 gap-2 font-mono font-medium text-stone-800" style={{ fontSize: "12px" }}>
-                    {suite.blankMatchingSuite.options.map((opt, idx) => (
-                      <div key={idx} className="bg-white border border-stone-200 py-1.5 px-2 rounded-md shadow-sm">
-                        {opt}
-                      </div>
-                    ))}
-                  </div>
-                </div>
-
-                <h3 style={{ fontSize: "14px", fontWeight: "bold" }} className="text-stone-950 mt-4 mb-1">Matching Passage</h3>
-                <div style={{ fontSize: "12px" }} className="bg-stone-55 border border-stone-200 rounded-xl p-5 md:p-6 leading-loose text-stone-900 whitespace-pre-wrap">
-                  {suite.blankMatchingSuite.passage}
-                </div>
-              </div>
-            )}
           </div>
         )}
 
@@ -1436,35 +1123,6 @@ ${serializedData}
                 </div>
               )}
 
-              {/* Part III: Cloze Test */}
-              {suite.clozeSuite && (
-                <div className="border border-stone-300 rounded-md p-4">
-                  <h3 className="font-bold border-b border-stone-300 pb-1 mb-3" style={{ fontSize: "14px" }}>Part III: Cloze Test Answers (綜合測驗)</h3>
-                  <div className="grid grid-cols-5 gap-y-4 gap-x-2">
-                    {suite.clozeSuite.questions.map((q, idx) => (
-                      <div key={idx} className="flex items-center gap-2">
-                        <span className="font-mono font-bold w-14">Gap ({q.gapNumber}).</span>
-                        <span className="border border-stone-400 rounded w-10 h-7 flex items-center justify-center font-bold text-stone-300">[ &nbsp; ]</span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {/* Part IV: Blank Matching */}
-              {suite.blankMatchingSuite && (
-                <div className="border border-stone-300 rounded-md p-4">
-                  <h3 className="font-bold border-b border-stone-300 pb-1 mb-3" style={{ fontSize: "14px" }}>Part IV: Blank Matching Answers (文意選填)</h3>
-                  <div className="grid grid-cols-5 gap-y-4 gap-x-2">
-                    {suite.blankMatchingSuite.answers.map((_, idx) => (
-                      <div key={idx} className="flex items-center gap-2">
-                        <span className="font-mono font-bold w-12">Blank ({idx + 1}).</span>
-                        <span className="border border-stone-400 rounded w-10 h-7 flex items-center justify-center font-bold text-stone-300">[ &nbsp; ]</span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
             </div>
           </div>
         )}
@@ -1533,55 +1191,6 @@ ${serializedData}
                 </div>
               )}
 
-              {/* Part III Answers (Cloze) */}
-              {suite.clozeSuite && (
-                <div>
-                  <div className="font-bold text-stone-800 mb-2">Part III: Cloze Test Answers (綜合測驗答案)</div>
-                  <table className="w-full text-center border-collapse border border-stone-300">
-                    <thead>
-                      <tr className="bg-stone-200">
-                        <th className="border border-stone-300 py-1 font-semibold">Gap Number</th>
-                        {suite.clozeSuite.questions.map((q, idx) => (
-                          <th key={idx} className="border border-stone-300 py-1 font-mono">({q.gapNumber})</th>
-                        ))}
-                      </tr>
-                    </thead>
-                    <tbody>
-                      <tr>
-                        <td className="border border-stone-300 font-bold py-1.5 bg-stone-100">Answer</td>
-                        {suite.clozeSuite.questions.map((q, idx) => (
-                          <td key={idx} className="border border-stone-300 font-bold font-mono text-amber-900 py-1.5">{q.correctAnswer}</td>
-                        ))}
-                      </tr>
-                    </tbody>
-                  </table>
-                </div>
-              )}
-
-              {/* Part IV Answers (Blank Matching) */}
-              {suite.blankMatchingSuite && (
-                <div>
-                  <div className="font-bold text-stone-800 mb-2">Part IV: Blank Matching Answers (文意選填答案)</div>
-                  <table className="w-full text-center border-collapse border border-stone-300">
-                    <thead>
-                      <tr className="bg-stone-200">
-                        <th className="border border-stone-300 py-1 font-semibold">Blank Number</th>
-                        {suite.blankMatchingSuite.answers.map((_, idx) => (
-                          <th key={idx} className="border border-stone-300 py-1 font-mono">({idx + 1})</th>
-                        ))}
-                      </tr>
-                    </thead>
-                    <tbody>
-                      <tr>
-                        <td className="border border-stone-300 font-bold py-1.5 bg-stone-100">Answer</td>
-                        {suite.blankMatchingSuite.answers.map((ans, idx) => (
-                          <td key={idx} className="border border-stone-300 font-bold font-mono text-amber-900 py-1.5">{ans}</td>
-                        ))}
-                      </tr>
-                    </tbody>
-                  </table>
-                </div>
-              )}
             </div>
           </div>
 
@@ -1644,45 +1253,6 @@ ${serializedData}
                   </div>
                 )}
 
-                {/* Part III solutions */}
-                {suite.clozeSuite && (
-                  <div id="solutions-cloze" className="space-y-3 pt-4 border-t border-dashed border-stone-200">
-                    <h4 style={{ fontSize: "12px", fontWeight: "bold" }} className="border-b border-stone-300 pb-1 text-stone-900 uppercase">Part III: Cloze Solutions</h4>
-                    <div className="grid grid-cols-1 gap-4">
-                      {suite.clozeSuite.questions.map((q, idx) => (
-                        <div key={idx} className="bg-stone-50/80 p-3 rounded-lg border border-stone-200">
-                          <div className="flex justify-between font-mono font-bold text-amber-900 mb-1">
-                            <span>Blank ({q.gapNumber})</span>
-                            <span>Correct: ({q.correctAnswer})</span>
-                          </div>
-                          <p className="text-stone-500 font-mono">Category: <span className="uppercase">{q.category}</span></p>
-                          <p className="text-stone-700 mt-1.5 leading-normal">
-                            <span className="font-sans font-bold">【詳解】</span> {q.explanation}
-                          </p>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-
-                {/* Part IV solutions */}
-                {suite.blankMatchingSuite && (
-                  <div id="solutions-matching" className="space-y-3 pt-4 border-t border-dashed border-stone-200">
-                    <h4 style={{ fontSize: "12px", fontWeight: "bold" }} className="border-b border-stone-300 pb-1 text-stone-900 uppercase">Part IV: Blank Matching Solutions</h4>
-                    <div className="space-y-2">
-                      {suite.blankMatchingSuite.explanations.map((expl, idx) => (
-                        <div key={idx} className="bg-stone-50/80 p-3 rounded-lg border border-stone-200">
-                          <div className="font-mono font-bold text-amber-900 mb-1">
-                            Blank ({idx + 1}) — Correct: [{suite.blankMatchingSuite!.answers[idx]}]
-                          </div>
-                          <p className="text-stone-700 leading-normal">
-                            <span className="font-sans font-bold">【詳解】</span> {expl}
-                          </p>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
               </div>
             </div>
           )}
@@ -1697,5 +1267,5 @@ ${serializedData}
         </div>
       </div>
     </div>
-  );
+      );
 }
