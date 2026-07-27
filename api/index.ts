@@ -335,6 +335,42 @@ function validateExplicitVocabularyMorphology(question: ExamQuestion): string[] 
   return errors;
 }
 
+function containsCjk(text: string): boolean {
+  return /[\u3400-\u4DBF\u4E00-\u9FFF\uF900-\uFAFF]/u.test(text);
+}
+
+function hasEnoughEnglishContent(text: string): boolean {
+  const latinLetters = (text.match(/[A-Za-z]/g) || []).length;
+  const cjkCharacters = (text.match(/[\u3400-\u4DBF\u4E00-\u9FFF\uF900-\uFAFF]/gu) || []).length;
+
+  // Vocabulary and reading questions must be written in English. A single CJK
+  // character usually means the model translated the stem or mixed languages.
+  if (cjkCharacters > 0) return false;
+  return latinLetters >= 8;
+}
+
+function validateQuestionLanguage(question: ExamQuestion, kind: "vocab" | "reading"): string[] {
+  const errors: string[] = [];
+  const stem = String(question.question || "").trim();
+
+  if (!hasEnoughEnglishContent(stem)) {
+    errors.push(
+      kind === "vocab"
+        ? "題幹必須使用英文；目前題幹含中文、非英文內容，或英文內容不足"
+        : "閱讀題目必須使用英文；目前題目含中文、非英文內容，或英文內容不足",
+    );
+  }
+
+  const optionTexts = question.options.map(stripOptionLabel);
+  optionTexts.forEach((option, index) => {
+    if (containsCjk(option)) {
+      errors.push(`選項 ${LETTERS[index]} 含中文或非英文內容；選項應使用英文`);
+    }
+  });
+
+  return errors;
+}
+
 function hasAmbiguityAdmission(explanation: string): boolean {
   const patterns = [
     /(?:也可以|亦可|也合理|同樣合理|可以成立|尚可|並非錯誤|不是完全錯誤)/,
@@ -365,6 +401,8 @@ function validateQuestion(question: ExamQuestion, kind: "vocab" | "reading"): st
   if (hasAmbiguityAdmission(question.explanation)) {
     errors.push("the explanation admits that another option could fit");
   }
+
+  errors.push(...validateQuestionLanguage(question, kind));
 
   if (kind === "vocab") {
     if (!question.wordTested) errors.push("missing wordTested");
@@ -597,6 +635,7 @@ const VOCAB_WRITER_SYSTEM = `You are a professional Taiwan GSAT English vocabula
 Return JSON only.
 
 NON-NEGOTIABLE ITEM RULES
+0. The question stem and all four options MUST be written in English only. Traditional Chinese is allowed only in explanation. Never translate the question stem into Chinese and never mix Chinese into an option.
 1. The task tests vocabulary meaning and usage, not a four-form word-family exercise.
 2. Every question uses four DIFFERENT lexical items. Never give implement / implemented / implementing / implementation as one option set.
 3. The correct target word may be inflected only as ordinary grammar requires: sound -> sounds, study -> studied, child -> children, careful -> carefully.
@@ -624,6 +663,7 @@ const VOCAB_REVIEWER_SYSTEM = `You are the final senior editor of a Taiwan GSAT 
 You receive one draft item. Repair it completely and return one corrected JSON object only.
 
 AUDIT PROCEDURE
+- First verify that the question stem and all four options are English-only. If the stem is Chinese or mixed-language, rewrite it completely in natural English while preserving the assigned target word.
 - Insert each of the four options into the sentence.
 - Confirm grammar, natural usage, collocation, semantic direction, and logical fit.
 - Inspect the exact form of EVERY displayed option. A dictionary-form verb must never remain where the blank requires an adjective, participle, third-person singular, past tense, plural, comparative, or other inflected form.
