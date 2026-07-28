@@ -402,8 +402,6 @@ function validateQuestion(question: ExamQuestion, kind: "vocab" | "reading"): st
     errors.push("the explanation admits that another option could fit");
   }
 
-  errors.push(...validateQuestionLanguage(question, kind));
-
   if (kind === "vocab") {
     if (!question.wordTested) errors.push("missing wordTested");
     if (!question.answerText) errors.push("missing answerText");
@@ -1435,6 +1433,7 @@ async function buildVocabularySection(
       ...(question.reviewWarnings || []),
       ...hard,
       ...soft,
+      ...validateQuestionLanguage(question, "vocab"),
     ]);
   });
 
@@ -1495,7 +1494,15 @@ async function buildReadingSection(
         if (errors.length === 0) {
           passage.questions = balanceQuestions(passage.questions);
           const finalErrors = validatePassage(passage);
-          if (finalErrors.length === 0) return passage;
+          if (finalErrors.length === 0) {
+            passage.questions = passage.questions.map((question) =>
+              attachReviewMetadata(question, [
+                ...(question.reviewWarnings || []),
+                ...validateQuestionLanguage(question, "reading"),
+              ]),
+            );
+            return passage;
+          }
           errors = finalErrors;
         }
       }
@@ -1512,7 +1519,10 @@ async function buildReadingSection(
   const fallback = await generateReadingDraft(level, selectedLevel);
   fallback.questions = fallback.questions.map((question) => {
     const errors = validateQuestion(question, "reading");
-    return attachReviewMetadata(question, errors);
+    return attachReviewMetadata(question, [
+      ...errors,
+      ...validateQuestionLanguage(question, "reading"),
+    ]);
   });
   return fallback;
 }
