@@ -59,6 +59,106 @@ function stripCodeFence(value: string): string {
     .trim();
 }
 
+/** Convert the Gemini-style schema objects used in this file into a strict
+ * JSON Schema accepted by OpenAI structured outputs. */
+function toOpenAIJsonSchema(schema: any): any {
+  if (!schema || typeof schema !== "object") return schema;
+
+  const rawType = String(schema.type ?? "").toLowerCase();
+  const converted: any = {};
+  if (rawType) converted.type = rawType;
+
+  if (schema.description) converted.description = schema.description;
+  if (Array.isArray(schema.enum)) converted.enum = schema.enum;
+
+  if (schema.items) converted.items = toOpenAIJsonSchema(schema.items);
+
+  if (schema.properties && typeof schema.properties === "object") {
+    converted.properties = Object.fromEntries(
+      Object.entries(schema.properties).map(([key, value]) => [
+        key,
+        toOpenAIJsonSchema(value),
+      ]),
+    );
+    converted.required = Array.isArray(schema.required)
+      ? schema.required
+      : Object.keys(schema.properties);
+    converted.additionalProperties = false;
+  }
+
+  return converted;
+}
+
+function extractJsonObject(raw: string): string {
+  const cleaned = stripCodeFence(raw).replace(/^\uFEFF/, "").trim();
+  const first = cleaned.indexOf("{");
+  const last = cleaned.lastIndexOf("}");
+  if (first >= 0 && last > first) return cleaned.slice(first, last + 1);
+  return cleaned;
+}
+
+function parseJsonResponse<T>(raw: string): T {
+  const candidate = extractJsonObject(raw);
+  try {
+    return JSON.parse(candidate) as T;
+  } catch (firstError) {
+    // Safe, narrow cleanup for the two most common model formatting slips.
+    // Do not attempt broad regex rewriting that could damage passage text.
+    const minimallyRepaired = candidate
+      .replace(/,\s*([}\]])/g, "$1")
+      .replace(/[\u201C\u201D]/g, '"');
+    try {
+      return JSON.parse(minimallyRepaired) as T;
+    } catch {
+      throw firstError;
+    }
+  }
+}
+
+async function callOpenAIJson(
+  systemPrompt: string,
+  userPrompt: string,
+  responseSchema: any,
+  temperature: number,
+): Promise<string> {
+  const model = process.env.OPENAI_API_MODEL || "gpt-4o-mini";
+  const baseRequest = {
+    model,
+    messages: [
+      { role: "system" as const, content: systemPrompt },
+      { role: "user" as const, content: userPrompt },
+    ],
+    temperature,
+  };
+
+  if (responseSchema) {
+    try {
+      const response = await getOpenAI().chat.completions.create({
+        ...baseRequest,
+        response_format: {
+          type: "json_schema",
+          json_schema: {
+            name: "gsat_exam_payload",
+            strict: true,
+            schema: toOpenAIJsonSchema(responseSchema),
+          },
+        },
+      } as any);
+      return response.choices[0]?.message?.content || "";
+    } catch (error) {
+      // Some user-selected legacy models do not support json_schema. Fall back
+      // to JSON mode rather than failing the whole generation request.
+      console.warn("OpenAI structured output unavailable; falling back to JSON mode:", error);
+    }
+  }
+
+  const response = await getOpenAI().chat.completions.create({
+    ...baseRequest,
+    response_format: { type: "json_object" },
+  });
+  return response.choices[0]?.message?.content || "";
+}
+
 async function callJsonModel<T>(
   systemPrompt: string,
   userPrompt: string,
@@ -68,16 +168,7 @@ async function callJsonModel<T>(
   let raw = "";
 
   if (process.env.OPENAI_API_KEY) {
-    const response = await getOpenAI().chat.completions.create({
-      model: process.env.OPENAI_API_MODEL || "gpt-4o-mini",
-      messages: [
-        { role: "system", content: systemPrompt },
-        { role: "user", content: userPrompt },
-      ],
-      response_format: { type: "json_object" },
-      temperature,
-    });
-    raw = response.choices[0]?.message?.content || "";
+    raw = await callOpenAIJson(systemPrompt, userPrompt, responseSchema, temperature);
   } else {
     const response = await getGemini().models.generateContent({
       model: process.env.GEMINI_API_MODEL || "gemini-2.5-flash",
@@ -95,9 +186,40 @@ async function callJsonModel<T>(
   if (!raw.trim()) throw new Error("The AI model returned an empty response.");
 
   try {
-    return JSON.parse(stripCodeFence(raw)) as T;
+    return parseJsonResponse<T>(raw);
   } catch (error: any) {
-    throw new Error(`The AI model returned invalid JSON: ${error?.message || String(error)}`);
+    // One conditional retry only. This does not slow normal generations and
+    // prevents a single malformed comma/bracket from discarding the exam.
+    const retrySystem = `${systemPrompt}\n\nCRITICAL JSON REQUIREMENT: Return one complete JSON object only. Use double-quoted keys and strings. Do not include markdown, comments, trailing commas, or text before/after the JSON.`;
+    let retryRaw = "";
+
+    if (process.env.OPENAI_API_KEY) {
+      retryRaw = await callOpenAIJson(retrySystem, userPrompt, responseSchema, 0);
+    } else {
+      const retry = await getGemini().models.generateContent({
+        model: process.env.GEMINI_API_MODEL || "gemini-2.5-flash",
+        contents: userPrompt,
+        config: {
+          systemInstruction: retrySystem,
+          responseMimeType: "application/json",
+          ...(responseSchema ? { responseSchema } : {}),
+          temperature: 0,
+        },
+      });
+      retryRaw = retry.text || "";
+    }
+
+    if (!retryRaw.trim()) {
+      throw new Error("The AI model returned invalid JSON and the retry was empty.");
+    }
+
+    try {
+      return parseJsonResponse<T>(retryRaw);
+    } catch (retryError: any) {
+      throw new Error(
+        `The AI model returned invalid JSON twice: ${retryError?.message || error?.message || String(retryError)}`,
+      );
+    }
   }
 }
 
@@ -1581,7 +1703,7 @@ app.post("/api/generate", async (req, res) => {
         itemLevelWarningsAreNonBlocking: true,
 
         // Item Generation Engine diagnostics.
-        engineVersion: "4.2.0-timeout-safe-dynamic-reading",
+        engineVersion: "5.0.0-structured-json-timeout-safe",
         pipeline: [
           "local-vocabulary-grounded-topic-planning",
           "generate",
