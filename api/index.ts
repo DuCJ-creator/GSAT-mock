@@ -295,8 +295,17 @@ function validateQuestion(question: ExamQuestion, kind: "vocab" | "reading"): st
   const answerIndex = LETTERS.indexOf(question.correctAnswer);
 
   if (!question.question) errors.push("missing question text");
-  if (kind === "vocab" && !/_{3,}/.test(question.question)) {
-    errors.push("the vocabulary sentence has no visible blank");
+  const placeholderPattern = /(?:needs? teacher review|requires? teacher edit|placeholder|\bedit\b)/i;
+  if (placeholderPattern.test(question.question) || placeholderPattern.test(question.explanation)) {
+    errors.push("placeholder or teacher-edit text is present");
+  }
+  if (kind === "vocab") {
+    const blanks = question.question.match(/_{3,}/g) || [];
+    if (blanks.length === 0) errors.push("the vocabulary sentence has no visible blank");
+    if (blanks.length > 1) errors.push("the vocabulary sentence must contain exactly one blank");
+    const chineseChars = (question.question.match(/[\u3400-\u9fff]/g) || []).length;
+    const latinWords = (question.question.match(/[A-Za-z]+/g) || []).length;
+    if (chineseChars > 2 || latinWords < 3) errors.push("the vocabulary stem is not a complete English sentence");
   }
   if (question.options.length !== 4 || texts.some((item) => !item)) {
     errors.push("the question does not have four complete options");
@@ -1024,6 +1033,84 @@ Return one corrected question object only.`;
   return normalizeQuestion(raw, "vocab");
 }
 
+async function repairVocabularyBatch(
+  questions: ExamQuestion[],
+  failedIndexes: number[],
+  targetWords: VocabularyInput[],
+  vocabList: VocabularyInput[],
+  selectedLevel: number | string,
+): Promise<Map<number, ExamQuestion>> {
+  if (failedIndexes.length === 0) return new Map();
+
+  const failedItems = failedIndexes.map((index) => ({
+    index,
+    targetWord: targetWords[index],
+    problems: [
+      ...validateQuestion(questions[index], "vocab"),
+      ...deterministicVocabularyWarnings(questions[index]),
+      ...(!sameLemma(questions[index].wordTested, targetWords[index].word)
+        ? [`wordTested must match assigned target "${targetWords[index].word}"`]
+        : []),
+    ],
+    draft: questions[index],
+  }));
+
+  const prompt = `Repair ONLY the failed vocabulary items below for GSAT Level ${selectedLevel || "mixed"}.
+Return exactly one repaired item for every supplied index, in the same order.
+Do not rewrite items that are not supplied.
+
+MANDATORY RULES
+- Preserve each assigned target dictionary entry in wordTested.
+- Keep a genuine one-sentence gap-filling item with exactly one visible blank: _____.
+- Add an explicit semantic lock so only one option is defensible.
+- Use four different lexical items; all displayed forms must fit the grammatical slot.
+- Independently solve the repaired item and set correctAnswer and answerText correctly.
+- The Traditional Chinese explanation must identify the forcing clue and explain why all distractors fail.
+- Never use placeholders or open-ended question formats.
+
+FAILED ITEMS
+${JSON.stringify(failedItems)}
+
+AVAILABLE VOCABULARY
+${formatVocabularyList(vocabList)}
+
+Return JSON only in this exact shape:
+{"vocabQuestions":[repaired item 1, repaired item 2, ...]}`;
+
+  const raw = await callJsonModel<any>(
+    VOCAB_REVIEWER_SYSTEM,
+    prompt,
+    vocabBatchSchema,
+    0.08,
+  );
+  const repairedRaw = Array.isArray(raw?.vocabQuestions) ? raw.vocabQuestions : [];
+  if (repairedRaw.length !== failedIndexes.length) {
+    throw new Error(
+      `Failed-item repair returned ${repairedRaw.length} items; expected ${failedIndexes.length}.`,
+    );
+  }
+
+  const repaired = new Map<number, ExamQuestion>();
+  failedIndexes.forEach((originalIndex, position) => {
+    repaired.set(originalIndex, normalizeQuestion(repairedRaw[position], "vocab"));
+  });
+  return repaired;
+}
+
+function vocabularyWarningsFor(
+  question: ExamQuestion,
+  targetWord: VocabularyInput,
+): string[] {
+  const warnings = [
+    ...validateQuestion(question, "vocab"),
+    ...deterministicVocabularyWarnings(question),
+  ];
+  if (!sameLemma(question.wordTested, targetWord.word)) {
+    warnings.push(`wordTested must match assigned target "${targetWord.word}"`);
+  }
+  return Array.from(new Set(warnings));
+}
+
 async function buildVocabularySection(
   vocabList: VocabularyInput[],
   selectedLevel: number | string,
@@ -1033,48 +1120,44 @@ async function buildVocabularySection(
     throw new Error("No vocabulary words are available for question generation.");
   }
 
-  // Serverless-friendly quality pipeline: one batch draft, one batch editorial
-  // pass, then one set-level semantic audit. This avoids the former dozens of
-  // per-item model calls while preserving a genuine editorial review stage.
-  let questions: ExamQuestion[] | null = null;
-  let lastError: unknown = null;
+  // Fast-quality pipeline:
+  // 1 model call: generate all 10 items.
+  // 0-1 model call: repair only items rejected by deterministic validation.
+  // No per-item morphology calls and no extra whole-set AI audit.
+  const questions = await generateVocabularyDraft(targetWords, vocabList, selectedLevel);
+  if (questions.length !== targetWords.length) {
+    throw new Error(`Vocabulary draft returned ${questions.length} items; expected ${targetWords.length}.`);
+  }
 
-  for (let attempt = 0; attempt < 2 && !questions; attempt++) {
+  const failedIndexes = questions
+    .map((question, index) => vocabularyWarningsFor(question, targetWords[index]).length ? index : -1)
+    .filter((index) => index >= 0);
+
+  let merged = [...questions];
+  if (failedIndexes.length > 0) {
     try {
-      const draft = await generateVocabularyDraft(targetWords, vocabList, selectedLevel);
-      if (draft.length !== targetWords.length) {
-        throw new Error(`Vocabulary draft returned ${draft.length} items; expected ${targetWords.length}.`);
-      }
-      questions = draft;
+      const repairs = await repairVocabularyBatch(
+        questions,
+        failedIndexes,
+        targetWords,
+        vocabList,
+        selectedLevel,
+      );
+      merged = merged.map((question, index) => repairs.get(index) || question);
     } catch (error) {
-      lastError = error;
-      console.warn(`Vocabulary batch generation attempt ${attempt + 1} failed:`, error);
+      // The original questions remain available and will be clearly marked for
+      // teacher review. One failed repair request never discards the whole paper.
+      console.warn("Failed-item vocabulary repair failed; keeping flagged drafts:", error);
     }
   }
 
-  if (!questions) {
-    throw lastError || new Error("Unable to generate the vocabulary section.");
-  }
-
-  try {
-    questions = await reviewVocabularyBatch(questions, targetWords, selectedLevel);
-  } catch (error) {
-    // Do not discard a usable draft merely because the editorial pass failed.
-    // Deterministic and semantic warnings below will surface questionable items.
-    console.warn("Vocabulary batch editorial review failed; keeping the draft for audited manual review:", error);
-  }
-
-  const balanced = balanceQuestions(questions);
-  const annotated = balanced.map((question, index) => {
-    const warnings = validateQuestion(question, "vocab");
-    if (!sameLemma(question.wordTested, targetWords[index].word)) {
-      warnings.push(`wordTested must match assigned target "${targetWords[index].word}"`);
-    }
-    warnings.push(...deterministicVocabularyWarnings(question));
-    return attachReviewMetadata(question, warnings);
-  });
-
-  return auditVocabularySetForManualReview(annotated);
+  const balanced = balanceQuestions(merged);
+  return balanced.map((question, index) =>
+    attachReviewMetadata(
+      question,
+      vocabularyWarningsFor(question, targetWords[index]),
+    ),
+  );
 }
 
 // -----------------------------------------------------------------------------
@@ -1114,40 +1197,53 @@ async function buildReadingSection(
   level: string,
   selectedLevel: number | string,
 ): Promise<ReadingPassage> {
-  let lastError: unknown = null;
+  // Fixed two-call ceiling: one draft + one complete editorial repair.
+  const draft = await generateReadingDraft(level, selectedLevel);
+  const draftErrors = validatePassage(draft);
 
-  for (let generationAttempt = 0; generationAttempt < 3; generationAttempt++) {
-    try {
-      let passage = await generateReadingDraft(level, selectedLevel);
-      let errors = validatePassage(passage);
-
-      // Always run at least one independent passage-level editorial review.
-      for (let repairAttempt = 0; repairAttempt < 3; repairAttempt++) {
-        passage = await repairReadingPassage(passage, errors, level);
-        errors = validatePassage(passage);
-        if (errors.length === 0) {
-          passage.questions = balanceQuestions(passage.questions);
-          const finalErrors = validatePassage(passage);
-          if (finalErrors.length === 0) return passage;
-          errors = finalErrors;
-        }
-      }
-      lastError = new Error(errors.join("; "));
-    } catch (error) {
-      lastError = error;
-      console.warn(`Reading generation attempt ${generationAttempt + 1} failed:`, error);
-    }
+  let passage: ReadingPassage;
+  try {
+    passage = await repairReadingPassage(draft, draftErrors, level);
+  } catch (error) {
+    console.warn("Reading editorial repair failed; validating the original draft:", error);
+    passage = draft;
   }
 
-  // Return the best available passage with per-question review markers rather
-  // than rejecting the entire paper after all repair attempts.
-  console.warn(`Reading passage ${level} requires manual review:`, lastError);
-  const fallback = await generateReadingDraft(level, selectedLevel);
-  fallback.questions = fallback.questions.map((question) => {
-    const errors = validateQuestion(question, "reading");
-    return attachReviewMetadata(question, errors);
+  // A missing passage or wrong question count cannot be safely represented as
+  // a usable test and must never be replaced with placeholder content.
+  if (!passage.title || !passage.passage || passage.questions.length !== 4) {
+    throw new Error(
+      "Reading generation did not produce one complete passage with exactly four questions. Please retry.",
+    );
+  }
+
+  passage.questions = balanceQuestions(passage.questions);
+  const passageErrors = validatePassage(passage);
+
+  passage.questions = passage.questions.map((question, index) => {
+    const prefix = `Q${index + 1}: `;
+    const warnings = [
+      ...validateQuestion(question, "reading"),
+      ...passageErrors
+        .filter((error) => error.startsWith(prefix))
+        .map((error) => error.slice(prefix.length)),
+    ];
+    return attachReviewMetadata(question, warnings);
   });
-  return fallback;
+
+  // Passage-level length is a non-blocking editorial warning; attach it to all
+  // four items so the teacher can see it without losing the generated set.
+  const globalWarnings = passageErrors.filter((error) => !/^Q\d+:/.test(error));
+  if (globalWarnings.length > 0) {
+    passage.questions = passage.questions.map((question) =>
+      attachReviewMetadata(question, [
+        ...(question.reviewWarnings || []),
+        ...globalWarnings,
+      ]),
+    );
+  }
+
+  return passage;
 }
 
 // -----------------------------------------------------------------------------
@@ -1298,16 +1394,14 @@ app.post("/api/generate", async (req, res) => {
         itemLevelWarningsAreNonBlocking: true,
 
         // Item Generation Engine diagnostics.
-        engineVersion: "3.4.0-evidence-context-audit",
+        engineVersion: "4.0.0-targeted-repair",
         pipeline: [
           "generate",
           "normalize",
           "deterministic-validate",
-          "editorial-review",
-          "context-aware-morphology-plan",
-          "mandatory-morphology-audit",
-          "set-level-open-world-ambiguity-audit",
-          "item-level-repair-or-replace",
+          "deterministic-failed-item-detection",
+          "single-batch-targeted-repair",
+          "manual-review-for-unresolved-items",
           "move-correct-option",
           "balanced-unpredictable-placement",
           "final-qa",
