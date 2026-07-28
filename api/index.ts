@@ -390,6 +390,13 @@ function validateQuestion(question: ExamQuestion, kind: "vocab" | "reading"): st
   if (kind === "vocab" && !/_{3,}/.test(question.question)) {
     errors.push("the vocabulary sentence has no visible blank");
   }
+  if (kind === "vocab") {
+    const blankCount = (question.question.match(/_{3,}/g) || []).length;
+    if (blankCount !== 1) errors.push("the vocabulary sentence must contain exactly one visible blank");
+    if (/\?\s*$/.test(question.question) || /\b(?:what|which)\s+(?:word|option|choice)\b/i.test(question.question)) {
+      errors.push("the vocabulary item must be a declarative gap-filling sentence, not a direct question");
+    }
+  }
   if (question.options.length !== 4 || texts.some((item) => !item)) {
     errors.push("the question does not have four complete options");
   }
@@ -634,6 +641,10 @@ Return JSON only.
 
 NON-NEGOTIABLE ITEM RULES
 0. The question stem and all four options MUST be written in English only. Traditional Chinese is allowed only in explanation. Never translate the question stem into Chinese and never mix Chinese into an option.
+0a. EVERY item MUST be a gap-filling sentence. The question field must be one natural declarative English sentence containing EXACTLY ONE visible blank written as five underscores: _____.
+0b. NEVER write a direct question, definition question, or prompt such as "What word...?", "Which word...?", "Choose the word...", or any sentence ending in a question mark.
+0c. The sentence must remain complete after inserting the correct option into _____. Do not place the target word elsewhere in the stem.
+0d. Example of the required format: Because the road was covered with ice, drivers had to _____ their speed to avoid accidents.
 1. The task tests vocabulary meaning and usage, not a four-form word-family exercise.
 2. Every question uses four DIFFERENT lexical items. Never give implement / implemented / implementing / implementation as one option set.
 3. The correct target word may be inflected only as ordinary grammar requires: sound -> sounds, study -> studied, child -> children, careful -> carefully.
@@ -1117,6 +1128,8 @@ Return JSON only in the form {"vocabQuestions":[...]}.
 
 Review the COMPLETE ten-question set in one pass. For every item:
 1. Keep the assigned wordTested lemma exactly as supplied.
+1a. The question field MUST remain a declarative gap-filling sentence with EXACTLY ONE _____ blank. Never convert it into a direct question or a "What word..." prompt.
+1b. If a draft lacks _____, rewrite it as one natural English sentence containing exactly one _____ blank.
 2. Ensure the stem and all four options are English; Traditional Chinese is allowed only in explanation.
 3. Ensure exactly four non-empty, distinct lexical options.
 4. Ensure the keyed option has the exact grammatical form required by the blank.
@@ -1240,12 +1253,11 @@ async function buildVocabularySection(
     );
   }
 
-  const reviewed = await reviewVocabularyBatchOnce(
-    draft,
-    targetWords,
-    vocabList,
-    selectedLevel,
-  );
+  // Keep the original batch output. A second generative reviewer was found to
+  // rewrite valid gap-filling sentences into open-ended "What word...?" items.
+  // Deterministic checks below flag only the exceptional item for teacher review
+  // without changing the requested exercise format or adding serverless latency.
+  const reviewed = draft;
 
   const annotated = reviewed.map((question, index) => {
     const warnings = [
@@ -1517,12 +1529,11 @@ app.post("/api/generate", async (req, res) => {
         itemLevelWarningsAreNonBlocking: true,
 
         // Item Generation Engine diagnostics.
-        engineVersion: "3.4.0-evidence-context-audit",
+        engineVersion: "3.5.0-gap-fill-serverless",
         pipeline: [
           "generate",
           "normalize",
           "deterministic-validate",
-          "editorial-review",
           "context-aware-morphology-plan",
           "mandatory-morphology-audit",
           "set-level-open-world-ambiguity-audit",
