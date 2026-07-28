@@ -159,7 +159,10 @@ function normalizeAnswer(value: unknown): AnswerLetter {
 
 function stripOptionLabel(value: unknown): string {
   return String(value ?? "")
-    .replace(/^\s*\(?[A-D]\)?[.、:：\-]?\s*/i, "")
+    // Remove only an actual answer label such as "(A) ", "B. ", or "C: ".
+    // Do not strip the first letter from normal words such as banana, begin,
+    // action, almost, or compact.
+    .replace(/^\s*(?:\([A-D]\)|[A-D][.、:：\-])\s*/i, "")
     .trim();
 }
 
@@ -169,55 +172,22 @@ function normalizeOptions(value: unknown): string[] {
   if (Array.isArray(value)) {
     raw = value;
   } else if (typeof value === "string") {
-    const source = value.trim();
-
-    // Accept common model formats: (A) text, A. text, A: text, or one option per line.
-    const labeled = Array.from(
-      source.matchAll(/(?:^|\n|\r|\s)(?:\(?([A-D])\)?[.、:：\-])\s*([\s\S]*?)(?=(?:\n|\r|\s)(?:\(?[A-D]\)?[.、:：\-])\s*|$)/gi),
-    );
-    if (labeled.length === 4) {
-      raw = labeled.map((match) => match[2]);
-    } else {
-      const parenthesized = source.match(/\([A-D]\)\s*[\s\S]*?(?=\s*\([A-D]\)|$)/g);
-      if (parenthesized?.length === 4) {
-        raw = parenthesized;
-      } else {
-        const pieces = source
-          .split(/\r?\n|\s*[|;；]\s*/)
-          .map((item) => item.trim())
-          .filter(Boolean);
-        if (pieces.length === 4) raw = pieces;
-      }
-    }
+    raw = value.match(/\([A-D]\)\s*[\s\S]*?(?=\s*\([A-D]\)|$)/g) || [];
   } else if (value && typeof value === "object") {
-    const objectValue = value as Record<string, unknown>;
-    const keyed = LETTERS.map((letter) =>
-      objectValue[letter] ?? objectValue[`(${letter})`] ?? objectValue[letter.toLowerCase()],
-    );
-    raw = keyed.every((item) => item !== undefined)
-      ? keyed
-      : Object.entries(objectValue)
-          .sort(([a], [b]) => a.localeCompare(b))
-          .map(([, item]) => item);
+    raw = Object.entries(value as Record<string, unknown>)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([, item]) => item);
   }
 
-  const texts = raw
-    .map((item) => {
-      if (item && typeof item === "object" && !Array.isArray(item)) {
-        const objectItem = item as Record<string, unknown>;
-        const preferred = LETTERS.map((letter) => objectItem[letter] ?? objectItem[`(${letter})`])
-          .find((candidate) => candidate !== undefined);
-        return stripOptionLabel(preferred ?? Object.values(objectItem)[0]);
-      }
-      return stripOptionLabel(item);
-    })
-    .map((text) => text.trim())
-    .filter(Boolean);
+  const texts = raw.map((item) => {
+    if (item && typeof item === "object" && !Array.isArray(item)) {
+      return stripOptionLabel(Object.values(item as Record<string, unknown>)[0]);
+    }
+    return stripOptionLabel(item);
+  });
 
-  if (texts.length !== 4) {
-    throw new Error(
-      `Model output contained ${texts.length} usable options; exactly four are required.`,
-    );
+  if (texts.length !== 4 || texts.some((text) => !text)) {
+    throw new Error("Each question must contain exactly four non-empty options.");
   }
 
   return texts.map((text, index) => `(${LETTERS[index]}) ${text}`);
@@ -276,101 +246,6 @@ function hasObviousWordFamilyCluster(options: string[]): boolean {
   return false;
 }
 
-function optionWords(value: unknown): string[] {
-  return stripOptionLabel(value)
-    .toLowerCase()
-    .replace(/[’']/g, "")
-    .replace(/[^a-z\s-]/g, " ")
-    .trim()
-    .split(/\s+/)
-    .filter(Boolean);
-}
-
-/**
- * Rejects option sets such as "horizontal rifle / naive rifle / rifle / compact rifle".
- * These do not test four different lexical items; they merely repeat one headword
- * with superficial modifiers.
- */
-function repeatedOptionHeadword(options: string[]): string | null {
-  const heads = options.map((option) => optionWords(option).at(-1) || "").filter(Boolean);
-  const counts = new Map<string, number>();
-  for (const head of heads) counts.set(head, (counts.get(head) || 0) + 1);
-  for (const [head, count] of counts) {
-    if (count >= 3) return head;
-  }
-  return null;
-}
-
-function normalizeComparableForm(value: unknown): string {
-  return stripOptionLabel(value).toLowerCase().replace(/[^a-z-]/g, "");
-}
-
-/**
- * Deterministic checks for high-confidence surface-form errors. These rules are
- * intentionally conservative: they only reject constructions whose grammar is
- * explicit in the stem, such as "to ____" or "must ____" requiring a base verb.
- */
-function validateExplicitVocabularyMorphology(question: ExamQuestion): string[] {
-  const errors: string[] = [];
-  const answerIndex = LETTERS.indexOf(question.correctAnswer);
-  const answer = normalizeComparableForm(question.options[answerIndex]);
-  const lemma = normalizeComparableForm(question.wordTested || "");
-  const stem = String(question.question || "").toLowerCase();
-
-  const requiresBaseVerb =
-    /(?:\bto|\bcan|\bcould|\bmay|\bmight|\bmust|\bshall|\bshould|\bwill|\bwould)\s+_{3,}/i.test(stem);
-
-  if (requiresBaseVerb && answer) {
-    const looksInflected =
-      /(?:ing|ed)$/.test(answer) ||
-      (/(?:s|es)$/.test(answer) && !/(?:ss|us|is)$/.test(answer));
-
-    // When wordTested is available, the keyed surface form must be the dictionary
-    // form in an explicit base-verb slot. This catches bulge -> bulges after "to".
-    if ((lemma && answer !== lemma) || (!lemma && looksInflected)) {
-      errors.push(`the keyed option "${stripOptionLabel(question.options[answerIndex])}" is not a base verb in an explicit base-form slot`);
-    }
-  }
-
-  return errors;
-}
-
-function containsCjk(text: string): boolean {
-  return /[\u3400-\u4DBF\u4E00-\u9FFF\uF900-\uFAFF]/u.test(text);
-}
-
-function hasEnoughEnglishContent(text: string): boolean {
-  const latinLetters = (text.match(/[A-Za-z]/g) || []).length;
-  const cjkCharacters = (text.match(/[\u3400-\u4DBF\u4E00-\u9FFF\uF900-\uFAFF]/gu) || []).length;
-
-  // Vocabulary and reading questions must be written in English. A single CJK
-  // character usually means the model translated the stem or mixed languages.
-  if (cjkCharacters > 0) return false;
-  return latinLetters >= 8;
-}
-
-function validateQuestionLanguage(question: ExamQuestion, kind: "vocab" | "reading"): string[] {
-  const errors: string[] = [];
-  const stem = String(question.question || "").trim();
-
-  if (!hasEnoughEnglishContent(stem)) {
-    errors.push(
-      kind === "vocab"
-        ? "題幹必須使用英文；目前題幹含中文、非英文內容，或英文內容不足"
-        : "閱讀題目必須使用英文；目前題目含中文、非英文內容，或英文內容不足",
-    );
-  }
-
-  const optionTexts = question.options.map(stripOptionLabel);
-  optionTexts.forEach((option, index) => {
-    if (containsCjk(option)) {
-      errors.push(`選項 ${LETTERS[index]} 含中文或非英文內容；選項應使用英文`);
-    }
-  });
-
-  return errors;
-}
-
 function hasAmbiguityAdmission(explanation: string): boolean {
   const patterns = [
     /(?:也可以|亦可|也合理|同樣合理|可以成立|尚可|並非錯誤|不是完全錯誤)/,
@@ -389,13 +264,6 @@ function validateQuestion(question: ExamQuestion, kind: "vocab" | "reading"): st
   if (!question.question) errors.push("missing question text");
   if (kind === "vocab" && !/_{3,}/.test(question.question)) {
     errors.push("the vocabulary sentence has no visible blank");
-  }
-  if (kind === "vocab") {
-    const blankCount = (question.question.match(/_{3,}/g) || []).length;
-    if (blankCount !== 1) errors.push("the vocabulary sentence must contain exactly one visible blank");
-    if (/\?\s*$/.test(question.question) || /\b(?:what|which)\s+(?:word|option|choice)\b/i.test(question.question)) {
-      errors.push("the vocabulary item must be a declarative gap-filling sentence, not a direct question");
-    }
   }
   if (question.options.length !== 4 || texts.some((item) => !item)) {
     errors.push("the question does not have four complete options");
@@ -418,11 +286,6 @@ function validateQuestion(question: ExamQuestion, kind: "vocab" | "reading"): st
     if (hasObviousWordFamilyCluster(question.options)) {
       errors.push("the options form a word-family exercise instead of a vocabulary-choice item");
     }
-    const repeatedHead = repeatedOptionHeadword(question.options);
-    if (repeatedHead) {
-      errors.push(`three or more options repeat the same headword "${repeatedHead}"`);
-    }
-    errors.push(...validateExplicitVocabularyMorphology(question));
   }
 
   return errors;
@@ -433,6 +296,7 @@ function splitValidationErrors(errors: string[]): { hard: string[]; soft: string
   const softPatterns = [
     /explanation admits that another option could fit/i,
     /suite-wide repeated options/i,
+    /word-family exercise/i,
   ];
   const soft: string[] = [];
   const hard: string[] = [];
@@ -450,38 +314,6 @@ function attachReviewMetadata(question: ExamQuestion, warnings: string[]): ExamQ
     reviewStatus: uniqueWarnings.length ? "manual-review" : "approved",
     reviewWarnings: uniqueWarnings,
   };
-}
-
-
-function createManualReviewFallbackQuestion(
-  targetWord: VocabularyInput,
-  vocabList: VocabularyInput[],
-  reason: string,
-): ExamQuestion {
-  const distractors = vocabList
-    .map((item) => String(item.word || "").trim())
-    .filter((word) => word && !sameLemma(word, targetWord.word))
-    .filter((word, index, all) => all.findIndex((item) => sameLemma(item, word)) === index)
-    .slice(0, 3);
-
-  while (distractors.length < 3) {
-    distractors.push(`review-option-${distractors.length + 1}`);
-  }
-
-  const optionTexts = [targetWord.word, ...distractors];
-  const options = optionTexts.map((text, index) => `(${LETTERS[index]}) ${text}`);
-
-  return attachReviewMetadata(
-    {
-      question: `_____ (${targetWord.word})`,
-      options,
-      correctAnswer: "A",
-      wordTested: targetWord.word,
-      answerText: targetWord.word,
-      explanation: "此題生成結果未通過自動檢查，請教師人工改寫題幹、選項、答案與解析後再發布。",
-    },
-    [`自動生成或修復失敗：${reason}`, "此題為保留試卷完整性的人工審核占位題，發布前請務必修改。"],
-  );
 }
 
 function countWords(text: string): number {
@@ -640,11 +472,6 @@ const VOCAB_WRITER_SYSTEM = `You are a professional Taiwan GSAT English vocabula
 Return JSON only.
 
 NON-NEGOTIABLE ITEM RULES
-0. The question stem and all four options MUST be written in English only. Traditional Chinese is allowed only in explanation. Never translate the question stem into Chinese and never mix Chinese into an option.
-0a. EVERY item MUST be a gap-filling sentence. The question field must be one natural declarative English sentence containing EXACTLY ONE visible blank written as five underscores: _____.
-0b. NEVER write a direct question, definition question, or prompt such as "What word...?", "Which word...?", "Choose the word...", or any sentence ending in a question mark.
-0c. The sentence must remain complete after inserting the correct option into _____. Do not place the target word elsewhere in the stem.
-0d. Example of the required format: Because the road was covered with ice, drivers had to _____ their speed to avoid accidents.
 1. The task tests vocabulary meaning and usage, not a four-form word-family exercise.
 2. Every question uses four DIFFERENT lexical items. Never give implement / implemented / implementing / implementation as one option set.
 3. The correct target word may be inflected only as ordinary grammar requires: sound -> sounds, study -> studied, child -> children, careful -> carefully.
@@ -672,7 +499,6 @@ const VOCAB_REVIEWER_SYSTEM = `You are the final senior editor of a Taiwan GSAT 
 You receive one draft item. Repair it completely and return one corrected JSON object only.
 
 AUDIT PROCEDURE
-- First verify that the question stem and all four options are English-only. If the stem is Chinese or mixed-language, rewrite it completely in natural English while preserving the assigned target word.
 - Insert each of the four options into the sentence.
 - Confirm grammar, natural usage, collocation, semantic direction, and logical fit.
 - Inspect the exact form of EVERY displayed option. A dictionary-form verb must never remain where the blank requires an adjective, participle, third-person singular, past tense, plural, comparative, or other inflected form.
@@ -1123,163 +949,257 @@ Return one corrected question object only.`;
   return normalizeQuestion(raw, "vocab");
 }
 
-const VOCAB_BATCH_REVIEWER_SYSTEM = `You are the final senior editor of a Taiwan GSAT vocabulary item bank.
-Return JSON only in the form {"vocabQuestions":[...]}.
-
-Review the COMPLETE ten-question set in one pass. For every item:
-1. Keep the assigned wordTested lemma exactly as supplied.
-1a. The question field MUST remain a declarative gap-filling sentence with EXACTLY ONE _____ blank. Never convert it into a direct question or a "What word..." prompt.
-1b. If a draft lacks _____, rewrite it as one natural English sentence containing exactly one _____ blank.
-2. Ensure the stem and all four options are English; Traditional Chinese is allowed only in explanation.
-3. Ensure exactly four non-empty, distinct lexical options.
-4. Ensure the keyed option has the exact grammatical form required by the blank.
-5. Ensure exactly one answer is defensible from explicit context.
-6. Reject repeated-headword option sets such as rifle / compact rifle / naive rifle.
-7. Set answerText to the exact keyed option text.
-8. Write a Traditional Chinese explanation grounded only in the stem.
-9. Preserve the number and order of questions.
-Do not design an answer-letter pattern; the server will rebalance options afterward.`;
-
-function safeNormalizeVocabularyQuestion(
-  raw: any,
-  targetWord: VocabularyInput,
-  vocabList: VocabularyInput[],
-  reasonPrefix = "",
-): ExamQuestion {
-  try {
-    const normalized = normalizeQuestion(raw, "vocab");
-    if (!sameLemma(normalized.wordTested, targetWord.word)) {
-      normalized.wordTested = targetWord.word;
-    }
-    const keyedIndex = LETTERS.indexOf(normalized.correctAnswer);
-    normalized.answerText = stripOptionLabel(normalized.options[keyedIndex]);
-    return normalized;
-  } catch (error: any) {
-    return createManualReviewFallbackQuestion(
-      targetWord,
-      vocabList,
-      `${reasonPrefix}${error?.message || String(error)}`,
-    );
-  }
-}
-
-async function reviewVocabularyBatchOnce(
-  questions: ExamQuestion[],
-  targetWords: VocabularyInput[],
-  vocabList: VocabularyInput[],
-  selectedLevel: number | string,
-): Promise<ExamQuestion[]> {
-  const assignments = targetWords.map((item, index) => ({
-    index,
-    word: item.word,
-    pos: item.pos,
-    meaning: item.meaning,
-  }));
-
-  try {
-    const raw = await callJsonModel<any>(
-      VOCAB_BATCH_REVIEWER_SYSTEM,
-      `Review and repair this complete Level ${selectedLevel || "mixed"} set in ONE response.\n` +
-        `TARGET ASSIGNMENTS:\n${JSON.stringify(assignments)}\n\n` +
-        `SOURCE VOCABULARY RANGE:\n${formatVocabularyList(vocabList)}\n\n` +
-        `DRAFT SET:\n${JSON.stringify({ vocabQuestions: questions })}`,
-      vocabBatchSchema,
-      0.05,
-    );
-
-    const items = Array.isArray(raw?.vocabQuestions) ? raw.vocabQuestions : [];
-    return targetWords.map((targetWord, index) =>
-      safeNormalizeVocabularyQuestion(
-        items[index] ?? questions[index],
-        targetWord,
-        vocabList,
-        `批次審題輸出格式異常：`,
-      ),
-    );
-  } catch (error) {
-    console.warn("Single-pass vocabulary batch review failed; keeping draft for manual review:", error);
-    return questions.map((question) =>
-      attachReviewMetadata(question, [
-        ...(question.reviewWarnings || []),
-        "批次自動審題未完成，請人工確認",
-      ]),
-    );
-  }
-}
-
 async function buildVocabularySection(
   vocabList: VocabularyInput[],
   selectedLevel: number | string,
 ): Promise<ExamQuestion[]> {
   const targetWords = selectTargetVocabulary(vocabList, 10);
+  const uniqueVocabularyCount = new Set(vocabList.map((item) => item.word.trim().toLowerCase()).filter(Boolean)).size;
+  const enforceSuiteWideOptionUniqueness = uniqueVocabularyCount >= targetWords.length * 4;
   if (targetWords.length === 0) {
     throw new Error("No vocabulary words are available for question generation.");
   }
 
-  // Serverless-safe policy: at most TWO model calls for the entire vocabulary set:
-  // one batch generation call and one batch editorial-review call. Any remaining
-  // uncertainty is surfaced as manual-review metadata instead of triggering
-  // per-item repair/regeneration loops that can exceed Vercel's time limit.
-  let draft: ExamQuestion[] = [];
-  try {
-    const raw = await callJsonModel<any>(
-      VOCAB_WRITER_SYSTEM,
-      `Create exactly ${targetWords.length} GSAT vocabulary questions for Level ${selectedLevel || "mixed"}.\n` +
-        `Question N MUST test the corresponding target below. Keep wordTested as the dictionary lemma.\n` +
-        `The stem and options must be English; Traditional Chinese is allowed only in explanation.\n` +
-        `Return {"vocabQuestions":[...]} in the same order.\n\n` +
-        `TARGETS:\n${targetWords.map((item, i) => `${i + 1}. ${item.word}${item.pos ? ` (${item.pos})` : ""}${item.meaning ? ` — ${item.meaning}` : ""}`).join("\n")}\n\n` +
-        `VOCABULARY RANGE:\n${formatVocabularyList(vocabList)}`,
-      vocabBatchSchema,
-      0.3,
-    );
-    const items = Array.isArray(raw?.vocabQuestions) ? raw.vocabQuestions : [];
-    draft = targetWords.map((targetWord, index) =>
-      safeNormalizeVocabularyQuestion(
-        items[index],
-        targetWord,
-        vocabList,
-        "初次生成格式異常：",
-      ),
-    );
-  } catch (error: any) {
-    console.warn("Vocabulary batch generation failed; returning editable manual-review items:", error);
-    draft = targetWords.map((targetWord) =>
-      createManualReviewFallbackQuestion(
-        targetWord,
-        vocabList,
-        error?.message || String(error),
-      ),
-    );
+  let questions: ExamQuestion[] = [];
+  let lastError: unknown = null;
+
+  for (let batchAttempt = 0; batchAttempt < 3 && questions.length < targetWords.length; batchAttempt++) {
+    try {
+      questions = await generateVocabularyDraft(targetWords, vocabList, selectedLevel);
+    } catch (error) {
+      lastError = error;
+      console.warn(`Vocabulary batch attempt ${batchAttempt + 1} failed:`, error);
+    }
   }
 
-  // Keep the original batch output. A second generative reviewer was found to
-  // rewrite valid gap-filling sentences into open-ended "What word...?" items.
-  // Deterministic checks below flag only the exceptional item for teacher review
-  // without changing the requested exercise format or adding serverless latency.
-  const reviewed = draft;
-
-  const annotated = reviewed.map((question, index) => {
-    const warnings = [
-      ...(question.reviewWarnings || []),
-      ...validateQuestion(question, "vocab"),
-      ...validateQuestionLanguage(question, "vocab"),
-      ...deterministicOpenWorldWarnings(question),
-    ];
-    if (!sameLemma(question.wordTested, targetWords[index].word)) {
-      warnings.push(`wordTested must be the assigned target "${targetWords[index].word}"`);
+  while (questions.length < targetWords.length) {
+    const targetWord = targetWords[questions.length];
+    try {
+      questions.push(
+        await generateOneVocabularyQuestion(
+          targetWord,
+          vocabList,
+          selectedLevel,
+          questions.map((q) => q.question),
+          enforceSuiteWideOptionUniqueness ? questions : [],
+        ),
+      );
+    } catch (error) {
+      lastError = error;
+      if (questions.length === 0) throw error;
+      break;
     }
-    return attachReviewMetadata(question, warnings);
+  }
+
+  if (questions.length !== targetWords.length) {
+    throw lastError || new Error(`Unable to generate ${targetWords.length} vocabulary questions; received ${questions.length}.`);
+  }
+
+  const reviewed: ExamQuestion[] = [];
+
+  for (let index = 0; index < questions.length; index++) {
+    const targetWord = targetWords[index];
+    let current = questions[index];
+    let errors = validateQuestion(current, "vocab");
+    if (!sameLemma(current.wordTested, targetWord.word)) {
+      errors.push(`wordTested must be the assigned target "${targetWord.word}"`);
+    }
+    if (enforceSuiteWideOptionUniqueness) {
+      const priorKeys = usedOptionKeys(reviewed);
+      const conflicts = current.options
+        .map(stripOptionLabel)
+        .filter((option) => priorKeys.has(optionLexemeKey(option)));
+      if (conflicts.length) errors.push(`suite-wide repeated options: ${conflicts.join(", ")}`);
+    }
+
+    for (let repairAttempt = 0; repairAttempt < 3; repairAttempt++) {
+      try {
+        current = await repairVocabularyQuestion(
+          current,
+          errors,
+          targetWord,
+          vocabList,
+          selectedLevel,
+          enforceSuiteWideOptionUniqueness ? reviewed : [],
+        );
+        errors = validateQuestion(current, "vocab");
+        if (!sameLemma(current.wordTested, targetWord.word)) {
+          errors.push(`wordTested must be the assigned target "${targetWord.word}"`);
+        }
+        if (enforceSuiteWideOptionUniqueness) {
+          const priorKeys = usedOptionKeys(reviewed);
+          const conflicts = current.options
+            .map(stripOptionLabel)
+            .filter((option) => priorKeys.has(optionLexemeKey(option)));
+          if (conflicts.length) errors.push(`suite-wide repeated options: ${conflicts.join(", ")}`);
+        }
+        if (errors.length === 0) break;
+      } catch (error) {
+        lastError = error;
+        console.warn(`Vocabulary Q${index + 1} repair ${repairAttempt + 1} failed:`, error);
+      }
+    }
+
+    if (errors.length > 0) {
+      let replacement: ExamQuestion | null = null;
+      for (let replacementAttempt = 0; replacementAttempt < 3; replacementAttempt++) {
+        try {
+          const fresh = await generateOneVocabularyQuestion(
+            targetWord,
+            vocabList,
+            selectedLevel,
+            reviewed.map((q) => q.question),
+            enforceSuiteWideOptionUniqueness ? reviewed : [],
+          );
+          const freshErrors = validateQuestion(fresh, "vocab");
+          if (!sameLemma(fresh.wordTested, targetWord.word)) {
+            freshErrors.push(`wordTested must be the assigned target "${targetWord.word}"`);
+          }
+          const repaired = await repairVocabularyQuestion(
+            fresh,
+            freshErrors,
+            targetWord,
+            vocabList,
+            selectedLevel,
+            enforceSuiteWideOptionUniqueness ? reviewed : [],
+          );
+          const repairedErrors = validateQuestion(repaired, "vocab");
+          if (!sameLemma(repaired.wordTested, targetWord.word)) {
+            repairedErrors.push(`wordTested must be the assigned target "${targetWord.word}"`);
+          }
+          if (enforceSuiteWideOptionUniqueness) {
+            const priorKeys = usedOptionKeys(reviewed);
+            const conflicts = repaired.options
+              .map(stripOptionLabel)
+              .filter((option) => priorKeys.has(optionLexemeKey(option)));
+            if (conflicts.length) repairedErrors.push(`suite-wide repeated options: ${conflicts.join(", ")}`);
+          }
+          if (repairedErrors.length === 0) {
+            replacement = repaired;
+            break;
+          }
+        } catch (error) {
+          lastError = error;
+        }
+      }
+      if (!replacement) {
+        // Graceful fallback: quality remains mandatory, but suite-wide option
+        // uniqueness becomes a soft constraint after the strict repair/regeneration
+        // attempts are exhausted. This prevents one difficult item from rejecting
+        // the entire paper and surfacing an error in the frontend.
+        console.warn(
+          `Vocabulary Q${index + 1}: strict suite-wide option uniqueness could not be satisfied; retrying with quality-only validation.`,
+          lastError,
+        );
+
+        for (let fallbackAttempt = 0; fallbackAttempt < 5; fallbackAttempt++) {
+          try {
+            const fresh = await generateOneVocabularyQuestion(
+              targetWord,
+              vocabList,
+              selectedLevel,
+              reviewed.map((q) => q.question),
+              [],
+            );
+            const freshErrors = validateQuestion(fresh, "vocab");
+            if (!sameLemma(fresh.wordTested, targetWord.word)) {
+              freshErrors.push(`wordTested must be the assigned target "${targetWord.word}"`);
+            }
+
+            const repaired = await repairVocabularyQuestion(
+              fresh,
+              freshErrors,
+              targetWord,
+              vocabList,
+              selectedLevel,
+              [],
+            );
+            const repairedErrors = validateQuestion(repaired, "vocab");
+            if (!sameLemma(repaired.wordTested, targetWord.word)) {
+              repairedErrors.push(`wordTested must be the assigned target "${targetWord.word}"`);
+            }
+
+            if (repairedErrors.length === 0) {
+              replacement = repaired;
+              break;
+            }
+          } catch (error) {
+            lastError = error;
+            console.warn(
+              `Vocabulary Q${index + 1} quality-only fallback ${fallbackAttempt + 1} failed:`,
+              error,
+            );
+          }
+        }
+      }
+
+      if (!replacement) {
+        throw lastError || new Error(
+          `Vocabulary question ${index + 1} could not be generated after all repair attempts.`,
+        );
+      }
+      current = replacement;
+    }
+
+    // Mandatory final morphology audit. This catches cases such as
+    // embarrass -> embarrassed after "felt completely" even when an earlier
+    // semantic reviewer overlooked the surface form.
+    let grammarAudited = current;
+    for (let grammarAttempt = 0; grammarAttempt < 2; grammarAttempt++) {
+      try {
+        const morphologyPlan = await analyzeMorphologyPlan(grammarAudited, targetWord);
+        grammarAudited = await grammarAuditVocabularyQuestion(
+          grammarAudited,
+          targetWord,
+          selectedLevel,
+          morphologyPlan,
+        );
+        const grammarErrors = validateQuestion(grammarAudited, "vocab");
+        if (!sameLemma(grammarAudited.wordTested, targetWord.word)) {
+          grammarErrors.push(`wordTested must remain the assigned target "${targetWord.word}"`);
+        }
+        if (grammarErrors.length === 0) break;
+      } catch (error) {
+        lastError = error;
+        console.warn(`Vocabulary Q${index + 1} grammar audit ${grammarAttempt + 1} failed:`, error);
+      }
+    }
+    current = grammarAudited;
+
+    reviewed.push(current);
+  }
+
+  const balanced = balanceQuestions(reviewed);
+  if (enforceSuiteWideOptionUniqueness) {
+    const duplicates = suiteDuplicateOptions(balanced);
+    if (duplicates.length) {
+      // Uniqueness is preferred, not a reason to discard an otherwise valid paper.
+      // This can occur when the model cannot produce ten high-quality items while
+      // also avoiding every previously used lexeme.
+      console.warn(
+        `Vocabulary suite contains unavoidable repeated option lexemes: ${duplicates.join("; ")}`,
+      );
+    }
+  }
+
+  const structurallyAnnotated = balanced.map((question, index) => {
+    const errors = validateQuestion(question, "vocab");
+    if (!sameLemma(question.wordTested, targetWords[index].word)) {
+      errors.push(`wordTested no longer matches assigned target "${targetWords[index].word}"`);
+    }
+    const { hard, soft } = splitValidationErrors(errors);
+    if (hard.length) {
+      // Keep the usable item instead of discarding the whole paper. Structural
+      // failures remain visible as manual-review warnings for teacher editing.
+      console.warn(`Vocabulary Q${index + 1} requires manual review: ${hard.join("; ")}`);
+    }
+    return attachReviewMetadata(question, [...hard, ...soft]);
   });
 
-  // Reposition the actual correct options only after content review. If a malformed
-  // manual-review fallback somehow prevents balancing, return the annotated set.
-  try {
-    return balanceQuestions(annotated);
-  } catch (error) {
-    console.warn("Answer balancing skipped because one item needs manual review:", error);
-    return annotated;
-  }
+  // One efficient set-level semantic audit catches open-world ambiguity that a
+  // repair model may overlook (e.g. four languages, relatives, or animals that
+  // could all truthfully fill a context-free blank). These are warnings only.
+  return auditVocabularySetForManualReview(structurallyAnnotated);
 }
 
 // -----------------------------------------------------------------------------
@@ -1319,66 +1239,40 @@ async function buildReadingSection(
   level: string,
   selectedLevel: number | string,
 ): Promise<ReadingPassage> {
-  // Serverless-safe policy: one draft call and one editorial-review call only.
-  // Remaining issues become manual-review warnings rather than retry loops.
-  let passage: ReadingPassage;
-  try {
-    passage = await generateReadingDraft(level, selectedLevel);
-  } catch (error) {
-    console.warn(`Reading draft ${level} failed:`, error);
-    return {
-      level,
-      title: "[Needs teacher review]",
-      passage: "The reading passage could not be generated automatically. Please replace this passage before publishing.",
-      questions: Array.from({ length: 4 }, (_, index) =>
-        attachReviewMetadata(
-          {
-            question: `Question ${index + 1} requires teacher editing.`,
-            options: ["(A) Edit", "(B) Edit", "(C) Edit", "(D) Edit"],
-            correctAnswer: "A",
-            explanation: "自動生成失敗，請人工修改本題。",
-          },
-          ["閱讀測驗自動生成失敗，請人工修改"],
-        ),
-      ),
-    };
+  let lastError: unknown = null;
+
+  for (let generationAttempt = 0; generationAttempt < 3; generationAttempt++) {
+    try {
+      let passage = await generateReadingDraft(level, selectedLevel);
+      let errors = validatePassage(passage);
+
+      // Always run at least one independent passage-level editorial review.
+      for (let repairAttempt = 0; repairAttempt < 3; repairAttempt++) {
+        passage = await repairReadingPassage(passage, errors, level);
+        errors = validatePassage(passage);
+        if (errors.length === 0) {
+          passage.questions = balanceQuestions(passage.questions);
+          const finalErrors = validatePassage(passage);
+          if (finalErrors.length === 0) return passage;
+          errors = finalErrors;
+        }
+      }
+      lastError = new Error(errors.join("; "));
+    } catch (error) {
+      lastError = error;
+      console.warn(`Reading generation attempt ${generationAttempt + 1} failed:`, error);
+    }
   }
 
-  try {
-    passage = await repairReadingPassage(passage, validatePassage(passage), level);
-  } catch (error) {
-    console.warn(`Single-pass reading review ${level} failed; keeping draft:`, error);
-  }
-
-  passage.questions = (passage.questions || []).slice(0, 4).map((question) =>
-    attachReviewMetadata(question, [
-      ...(question.reviewWarnings || []),
-      ...validateQuestion(question, "reading"),
-      ...validateQuestionLanguage(question, "reading"),
-    ]),
-  );
-
-  while (passage.questions.length < 4) {
-    const index = passage.questions.length;
-    passage.questions.push(
-      attachReviewMetadata(
-        {
-          question: `Question ${index + 1} requires teacher editing.`,
-          options: ["(A) Edit", "(B) Edit", "(C) Edit", "(D) Edit"],
-          correctAnswer: "A",
-          explanation: "題目數量不足，請人工修改本題。",
-        },
-        ["閱讀題數不足，請人工修改"],
-      ),
-    );
-  }
-
-  try {
-    passage.questions = balanceQuestions(passage.questions);
-  } catch (error) {
-    console.warn("Reading answer balancing skipped:", error);
-  }
-  return passage;
+  // Return the best available passage with per-question review markers rather
+  // than rejecting the entire paper after all repair attempts.
+  console.warn(`Reading passage ${level} requires manual review:`, lastError);
+  const fallback = await generateReadingDraft(level, selectedLevel);
+  fallback.questions = fallback.questions.map((question) => {
+    const errors = validateQuestion(question, "reading");
+    return attachReviewMetadata(question, errors);
+  });
+  return fallback;
 }
 
 // -----------------------------------------------------------------------------
@@ -1529,11 +1423,12 @@ app.post("/api/generate", async (req, res) => {
         itemLevelWarningsAreNonBlocking: true,
 
         // Item Generation Engine diagnostics.
-        engineVersion: "3.5.0-gap-fill-serverless",
+        engineVersion: "3.4.0-evidence-context-audit",
         pipeline: [
           "generate",
           "normalize",
           "deterministic-validate",
+          "editorial-review",
           "context-aware-morphology-plan",
           "mandatory-morphology-audit",
           "set-level-open-world-ambiguity-audit",
