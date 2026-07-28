@@ -256,6 +256,39 @@ function hasAmbiguityAdmission(explanation: string): boolean {
   return patterns.some((pattern) => pattern.test(explanation));
 }
 
+function deterministicVocabularyWarnings(question: ExamQuestion): string[] {
+  const warnings: string[] = [];
+  const stem = String(question.question || "").toLowerCase();
+  const texts = question.options.map(stripOptionLabel).map((text) =>
+    text.toLowerCase().replace(/[^a-z-]/g, ""),
+  );
+
+  // Generic spatial-preposition stems are often open-world ambiguous.
+  // Example: "The cat is hiding ___ the box" can naturally take inside,
+  // outside, behind, under, or on unless the sentence provides a location clue.
+  const spatialWords = new Set([
+    "in", "inside", "outside", "on", "under", "behind", "beside",
+    "near", "above", "below", "around", "within", "beneath", "over",
+  ]);
+  const spatialCount = texts.filter((text) => spatialWords.has(text)).length;
+  const hasSpatialBlank = /\b(?:hide|hides|hiding|sit|sits|sitting|stand|stands|standing|stay|stays|staying|lie|lies|lying|put|place|placed)\b[^.?!]{0,35}_{3,}[^.?!]{0,25}\b(?:box|table|chair|bed|house|room|car|tree|door|container|bag)\b/i.test(stem);
+  const hasLocationLock = /(?:because|so that|to avoid|protected from|could not be seen|covered by|surrounded by|beneath the lid|under the roof|within the walls|on top of|directly below|just outside|deep inside)/i.test(stem);
+  if (spatialCount >= 2 && hasSpatialBlank && !hasLocationLock) {
+    warnings.push("位置介系詞題缺少唯一判斷線索；多個位置選項在現實情境中都可能成立");
+  }
+
+  // Base-form requirement after infinitive marker or modal auxiliary.
+  const answerIndex = LETTERS.indexOf(question.correctAnswer);
+  const keyed = texts[answerIndex] || "";
+  if (/(?:\bto|\bcan|\bcould|\bmay|\bmight|\bmust|\bshould|\bwould|\bwill)\s+_{3,}/i.test(stem)) {
+    if (/^[a-z]+(?:s|ed|ing)$/.test(keyed)) {
+      warnings.push("空格位於不定詞或情態助動詞後，正確選項疑似不是原形動詞");
+    }
+  }
+
+  return warnings;
+}
+
 function validateQuestion(question: ExamQuestion, kind: "vocab" | "reading"): string[] {
   const errors: string[] = [];
   const texts = question.options.map(stripOptionLabel);
@@ -827,6 +860,48 @@ Return {"vocabQuestions":[...]} with exactly ${targetWords.length} items in the 
   return items.slice(0, targetWords.length).map((item: any) => normalizeQuestion(item, "vocab"));
 }
 
+const VOCAB_BATCH_REVIEWER_SYSTEM = `You are the final senior editor of a Taiwan GSAT vocabulary item bank.
+Return JSON only.
+
+You receive a complete ten-question vocabulary set with fixed target assignments.
+Repair the whole set in one pass while preserving question order and each assigned wordTested.
+
+MANDATORY RULES
+1. Every item must be one natural English gap-filling sentence containing exactly one visible blank written as _____.
+2. Never convert an item into a direct question such as "Which word..." or "What word...".
+3. Each item must have exactly four complete, distinct English options.
+4. Exactly one option must be defensible from explicit context in the sentence. Add a semantic lock when needed.
+5. Reject open-world location items such as "The cat is hiding ___ the box" unless the stem contains a clue that excludes all other locations.
+6. Correct grammar and morphology, including infinitive/base form, agreement, tense, voice, number, adjective/adverb form, and -ed/-ing participles.
+7. Keep wordTested as the assigned lemma and set answerText to the exact keyed option text.
+8. Explanations must be Traditional Chinese, cite the exact clue, and explain why all distractors fail.
+9. Do not reuse malformed or truncated words.
+10. Keep exactly ten items and return {"vocabQuestions":[...]}.`;
+
+async function reviewVocabularyBatch(
+  questions: ExamQuestion[],
+  targetWords: VocabularyInput[],
+  selectedLevel: number | string,
+): Promise<ExamQuestion[]> {
+  const assignments = targetWords.map((item, index) => ({
+    index,
+    word: item.word,
+    pos: item.pos,
+    meaning: item.meaning,
+  }));
+  const raw = await callJsonModel<any>(
+    VOCAB_BATCH_REVIEWER_SYSTEM,
+    `Repair this Level ${selectedLevel || "mixed"} ten-question set in one pass.\nTARGET ASSIGNMENTS:\n${JSON.stringify(assignments)}\nDRAFT SET:\n${JSON.stringify({ vocabQuestions: questions })}`,
+    vocabBatchSchema,
+    0.05,
+  );
+  const items = Array.isArray(raw?.vocabQuestions) ? raw.vocabQuestions : [];
+  if (items.length !== targetWords.length) {
+    throw new Error(`Batch reviewer returned ${items.length} items; expected ${targetWords.length}.`);
+  }
+  return items.map((item: any) => normalizeQuestion(item, "vocab"));
+}
+
 async function generateOneVocabularyQuestion(
   targetWord: VocabularyInput,
   vocabList: VocabularyInput[],
@@ -954,252 +1029,52 @@ async function buildVocabularySection(
   selectedLevel: number | string,
 ): Promise<ExamQuestion[]> {
   const targetWords = selectTargetVocabulary(vocabList, 10);
-  const uniqueVocabularyCount = new Set(vocabList.map((item) => item.word.trim().toLowerCase()).filter(Boolean)).size;
-  const enforceSuiteWideOptionUniqueness = uniqueVocabularyCount >= targetWords.length * 4;
   if (targetWords.length === 0) {
     throw new Error("No vocabulary words are available for question generation.");
   }
 
-  let questions: ExamQuestion[] = [];
+  // Serverless-friendly quality pipeline: one batch draft, one batch editorial
+  // pass, then one set-level semantic audit. This avoids the former dozens of
+  // per-item model calls while preserving a genuine editorial review stage.
+  let questions: ExamQuestion[] | null = null;
   let lastError: unknown = null;
 
-  for (let batchAttempt = 0; batchAttempt < 3 && questions.length < targetWords.length; batchAttempt++) {
+  for (let attempt = 0; attempt < 2 && !questions; attempt++) {
     try {
-      questions = await generateVocabularyDraft(targetWords, vocabList, selectedLevel);
+      const draft = await generateVocabularyDraft(targetWords, vocabList, selectedLevel);
+      if (draft.length !== targetWords.length) {
+        throw new Error(`Vocabulary draft returned ${draft.length} items; expected ${targetWords.length}.`);
+      }
+      questions = draft;
     } catch (error) {
       lastError = error;
-      console.warn(`Vocabulary batch attempt ${batchAttempt + 1} failed:`, error);
+      console.warn(`Vocabulary batch generation attempt ${attempt + 1} failed:`, error);
     }
   }
 
-  while (questions.length < targetWords.length) {
-    const targetWord = targetWords[questions.length];
-    try {
-      questions.push(
-        await generateOneVocabularyQuestion(
-          targetWord,
-          vocabList,
-          selectedLevel,
-          questions.map((q) => q.question),
-          enforceSuiteWideOptionUniqueness ? questions : [],
-        ),
-      );
-    } catch (error) {
-      lastError = error;
-      if (questions.length === 0) throw error;
-      break;
-    }
+  if (!questions) {
+    throw lastError || new Error("Unable to generate the vocabulary section.");
   }
 
-  if (questions.length !== targetWords.length) {
-    throw lastError || new Error(`Unable to generate ${targetWords.length} vocabulary questions; received ${questions.length}.`);
+  try {
+    questions = await reviewVocabularyBatch(questions, targetWords, selectedLevel);
+  } catch (error) {
+    // Do not discard a usable draft merely because the editorial pass failed.
+    // Deterministic and semantic warnings below will surface questionable items.
+    console.warn("Vocabulary batch editorial review failed; keeping the draft for audited manual review:", error);
   }
 
-  const reviewed: ExamQuestion[] = [];
-
-  for (let index = 0; index < questions.length; index++) {
-    const targetWord = targetWords[index];
-    let current = questions[index];
-    let errors = validateQuestion(current, "vocab");
-    if (!sameLemma(current.wordTested, targetWord.word)) {
-      errors.push(`wordTested must be the assigned target "${targetWord.word}"`);
-    }
-    if (enforceSuiteWideOptionUniqueness) {
-      const priorKeys = usedOptionKeys(reviewed);
-      const conflicts = current.options
-        .map(stripOptionLabel)
-        .filter((option) => priorKeys.has(optionLexemeKey(option)));
-      if (conflicts.length) errors.push(`suite-wide repeated options: ${conflicts.join(", ")}`);
-    }
-
-    for (let repairAttempt = 0; repairAttempt < 3; repairAttempt++) {
-      try {
-        current = await repairVocabularyQuestion(
-          current,
-          errors,
-          targetWord,
-          vocabList,
-          selectedLevel,
-          enforceSuiteWideOptionUniqueness ? reviewed : [],
-        );
-        errors = validateQuestion(current, "vocab");
-        if (!sameLemma(current.wordTested, targetWord.word)) {
-          errors.push(`wordTested must be the assigned target "${targetWord.word}"`);
-        }
-        if (enforceSuiteWideOptionUniqueness) {
-          const priorKeys = usedOptionKeys(reviewed);
-          const conflicts = current.options
-            .map(stripOptionLabel)
-            .filter((option) => priorKeys.has(optionLexemeKey(option)));
-          if (conflicts.length) errors.push(`suite-wide repeated options: ${conflicts.join(", ")}`);
-        }
-        if (errors.length === 0) break;
-      } catch (error) {
-        lastError = error;
-        console.warn(`Vocabulary Q${index + 1} repair ${repairAttempt + 1} failed:`, error);
-      }
-    }
-
-    if (errors.length > 0) {
-      let replacement: ExamQuestion | null = null;
-      for (let replacementAttempt = 0; replacementAttempt < 3; replacementAttempt++) {
-        try {
-          const fresh = await generateOneVocabularyQuestion(
-            targetWord,
-            vocabList,
-            selectedLevel,
-            reviewed.map((q) => q.question),
-            enforceSuiteWideOptionUniqueness ? reviewed : [],
-          );
-          const freshErrors = validateQuestion(fresh, "vocab");
-          if (!sameLemma(fresh.wordTested, targetWord.word)) {
-            freshErrors.push(`wordTested must be the assigned target "${targetWord.word}"`);
-          }
-          const repaired = await repairVocabularyQuestion(
-            fresh,
-            freshErrors,
-            targetWord,
-            vocabList,
-            selectedLevel,
-            enforceSuiteWideOptionUniqueness ? reviewed : [],
-          );
-          const repairedErrors = validateQuestion(repaired, "vocab");
-          if (!sameLemma(repaired.wordTested, targetWord.word)) {
-            repairedErrors.push(`wordTested must be the assigned target "${targetWord.word}"`);
-          }
-          if (enforceSuiteWideOptionUniqueness) {
-            const priorKeys = usedOptionKeys(reviewed);
-            const conflicts = repaired.options
-              .map(stripOptionLabel)
-              .filter((option) => priorKeys.has(optionLexemeKey(option)));
-            if (conflicts.length) repairedErrors.push(`suite-wide repeated options: ${conflicts.join(", ")}`);
-          }
-          if (repairedErrors.length === 0) {
-            replacement = repaired;
-            break;
-          }
-        } catch (error) {
-          lastError = error;
-        }
-      }
-      if (!replacement) {
-        // Graceful fallback: quality remains mandatory, but suite-wide option
-        // uniqueness becomes a soft constraint after the strict repair/regeneration
-        // attempts are exhausted. This prevents one difficult item from rejecting
-        // the entire paper and surfacing an error in the frontend.
-        console.warn(
-          `Vocabulary Q${index + 1}: strict suite-wide option uniqueness could not be satisfied; retrying with quality-only validation.`,
-          lastError,
-        );
-
-        for (let fallbackAttempt = 0; fallbackAttempt < 5; fallbackAttempt++) {
-          try {
-            const fresh = await generateOneVocabularyQuestion(
-              targetWord,
-              vocabList,
-              selectedLevel,
-              reviewed.map((q) => q.question),
-              [],
-            );
-            const freshErrors = validateQuestion(fresh, "vocab");
-            if (!sameLemma(fresh.wordTested, targetWord.word)) {
-              freshErrors.push(`wordTested must be the assigned target "${targetWord.word}"`);
-            }
-
-            const repaired = await repairVocabularyQuestion(
-              fresh,
-              freshErrors,
-              targetWord,
-              vocabList,
-              selectedLevel,
-              [],
-            );
-            const repairedErrors = validateQuestion(repaired, "vocab");
-            if (!sameLemma(repaired.wordTested, targetWord.word)) {
-              repairedErrors.push(`wordTested must be the assigned target "${targetWord.word}"`);
-            }
-
-            if (repairedErrors.length === 0) {
-              replacement = repaired;
-              break;
-            }
-          } catch (error) {
-            lastError = error;
-            console.warn(
-              `Vocabulary Q${index + 1} quality-only fallback ${fallbackAttempt + 1} failed:`,
-              error,
-            );
-          }
-        }
-      }
-
-      if (!replacement) {
-        throw lastError || new Error(
-          `Vocabulary question ${index + 1} could not be generated after all repair attempts.`,
-        );
-      }
-      current = replacement;
-    }
-
-    // Mandatory final morphology audit. This catches cases such as
-    // embarrass -> embarrassed after "felt completely" even when an earlier
-    // semantic reviewer overlooked the surface form.
-    let grammarAudited = current;
-    for (let grammarAttempt = 0; grammarAttempt < 2; grammarAttempt++) {
-      try {
-        const morphologyPlan = await analyzeMorphologyPlan(grammarAudited, targetWord);
-        grammarAudited = await grammarAuditVocabularyQuestion(
-          grammarAudited,
-          targetWord,
-          selectedLevel,
-          morphologyPlan,
-        );
-        const grammarErrors = validateQuestion(grammarAudited, "vocab");
-        if (!sameLemma(grammarAudited.wordTested, targetWord.word)) {
-          grammarErrors.push(`wordTested must remain the assigned target "${targetWord.word}"`);
-        }
-        if (grammarErrors.length === 0) break;
-      } catch (error) {
-        lastError = error;
-        console.warn(`Vocabulary Q${index + 1} grammar audit ${grammarAttempt + 1} failed:`, error);
-      }
-    }
-    current = grammarAudited;
-
-    reviewed.push(current);
-  }
-
-  const balanced = balanceQuestions(reviewed);
-  if (enforceSuiteWideOptionUniqueness) {
-    const duplicates = suiteDuplicateOptions(balanced);
-    if (duplicates.length) {
-      // Uniqueness is preferred, not a reason to discard an otherwise valid paper.
-      // This can occur when the model cannot produce ten high-quality items while
-      // also avoiding every previously used lexeme.
-      console.warn(
-        `Vocabulary suite contains unavoidable repeated option lexemes: ${duplicates.join("; ")}`,
-      );
-    }
-  }
-
-  const structurallyAnnotated = balanced.map((question, index) => {
-    const errors = validateQuestion(question, "vocab");
+  const balanced = balanceQuestions(questions);
+  const annotated = balanced.map((question, index) => {
+    const warnings = validateQuestion(question, "vocab");
     if (!sameLemma(question.wordTested, targetWords[index].word)) {
-      errors.push(`wordTested no longer matches assigned target "${targetWords[index].word}"`);
+      warnings.push(`wordTested must match assigned target "${targetWords[index].word}"`);
     }
-    const { hard, soft } = splitValidationErrors(errors);
-    if (hard.length) {
-      // Keep the usable item instead of discarding the whole paper. Structural
-      // failures remain visible as manual-review warnings for teacher editing.
-      console.warn(`Vocabulary Q${index + 1} requires manual review: ${hard.join("; ")}`);
-    }
-    return attachReviewMetadata(question, [...hard, ...soft]);
+    warnings.push(...deterministicVocabularyWarnings(question));
+    return attachReviewMetadata(question, warnings);
   });
 
-  // One efficient set-level semantic audit catches open-world ambiguity that a
-  // repair model may overlook (e.g. four languages, relatives, or animals that
-  // could all truthfully fill a context-free blank). These are warnings only.
-  return auditVocabularySetForManualReview(structurallyAnnotated);
+  return auditVocabularySetForManualReview(annotated);
 }
 
 // -----------------------------------------------------------------------------
