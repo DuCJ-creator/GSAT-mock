@@ -197,20 +197,79 @@ function optionTexts(options: unknown): string[] {
   return normalizeOptions(options).map(stripOptionLabel);
 }
 
-function normalizeQuestion(raw: any, kind: "vocab" | "reading"): ExamQuestion {
-  const options = normalizeOptions(raw?.options ?? raw?.choices);
-  const correctAnswer = normalizeAnswer(raw?.correctAnswer ?? raw?.answer);
+function firstNonEmptyString(...values: unknown[]): string {
+  for (const value of values) {
+    const text = String(value ?? "").trim();
+    if (text) return text;
+  }
+  return "";
+}
+
+/**
+ * Normalize model output without destroying previously valid data.
+ *
+ * OpenAI JSON mode guarantees valid JSON but does not guarantee that the model
+ * always uses our preferred property names. Older model replies have used
+ * `sentence`, `stem`, `questionText`, and `explanationZh`. Accept those aliases.
+ * During repair, missing fields fall back to the original item instead of being
+ * replaced by empty strings.
+ */
+function normalizeQuestion(
+  raw: any,
+  kind: "vocab" | "reading",
+  fallback?: ExamQuestion,
+): ExamQuestion {
+  const rawOptions = raw?.options ?? raw?.choices ?? raw?.answers;
+  const options = rawOptions != null
+    ? normalizeOptions(rawOptions)
+    : fallback
+      ? normalizeOptions(fallback.options)
+      : normalizeOptions([]);
+
+  const answerValue = raw?.correctAnswer ?? raw?.answer ?? raw?.correct_option ?? raw?.correctOption;
+  const correctAnswer = answerValue != null
+    ? normalizeAnswer(answerValue)
+    : fallback
+      ? fallback.correctAnswer
+      : normalizeAnswer("");
+
   const correctIndex = LETTERS.indexOf(correctAnswer);
   const exactAnswerText = stripOptionLabel(options[correctIndex]);
 
+  const questionText = firstNonEmptyString(
+    raw?.question,
+    raw?.sentence,
+    raw?.stem,
+    raw?.questionText,
+    raw?.prompt,
+    fallback?.question,
+  );
+  const explanation = firstNonEmptyString(
+    raw?.explanation,
+    raw?.explanationZh,
+    raw?.explanation_zh,
+    raw?.traditionalChineseExplanation,
+    raw?.rationale,
+    raw?.solution,
+    fallback?.explanation,
+  );
+
   return {
-    question: String(raw?.question ?? "").trim(),
+    ...(fallback || {}),
+    question: questionText,
     options,
     correctAnswer,
-    explanation: String(raw?.explanation ?? "").trim(),
+    explanation,
     ...(kind === "vocab"
       ? {
-          wordTested: String(raw?.wordTested ?? "").trim(),
+          wordTested: firstNonEmptyString(
+            raw?.wordTested,
+            raw?.targetWord,
+            raw?.target,
+            fallback?.wordTested,
+          ),
+          // Never trust a stale model-supplied answerText. Recompute it from the
+          // actual keyed option after normalization.
           answerText: exactAnswerText,
         }
       : {}),
@@ -315,6 +374,10 @@ function validateQuestion(question: ExamQuestion, kind: "vocab" | "reading"): st
   }
   if (!texts[answerIndex]) errors.push("the answer letter does not identify an option");
   if (!question.explanation) errors.push("missing answer explanation");
+  const explanationChineseChars = (question.explanation.match(/[\u3400-\u9fff]/g) || []).length;
+  if (question.explanation && explanationChineseChars < 8) {
+    errors.push("the answer explanation must be written in Traditional Chinese");
+  }
   if (hasAmbiguityAdmission(question.explanation)) {
     errors.push("the explanation admits that another option could fit");
   }
@@ -830,7 +893,7 @@ function formatVocabularyList(vocabList: VocabularyInput[]): string {
 }
 
 // -----------------------------------------------------------------------------
-// Vocabulary generation and item-level repair
+// Vocabulary generation: generate -> read-only validate -> targeted batch repair
 // -----------------------------------------------------------------------------
 
 async function generateVocabularyDraft(
@@ -856,7 +919,7 @@ ${targetAssignments}
 FULL VOCABULARY RANGE FOR DISTRACTORS
 ${formatVocabularyList(vocabList)}
 
-Return {"vocabQuestions":[...]} with exactly ${targetWords.length} items in the same order as the assignments.`;
+Return {"vocabQuestions":[...]} with exactly ${targetWords.length} items in the same order as the assignments. Every item MUST use these exact keys: question, options, correctAnswer, explanation, wordTested, answerText. The question field must contain the complete sentence with _____. The explanation field must be Traditional Chinese.`;
 
   const raw = await callJsonModel<any>(
     VOCAB_WRITER_SYSTEM,
@@ -1033,6 +1096,22 @@ Return one corrected question object only.`;
   return normalizeQuestion(raw, "vocab");
 }
 
+
+const VOCAB_TARGETED_BATCH_REPAIR_SYSTEM = `You are a senior Taiwan GSAT vocabulary editor.
+Return JSON only in the requested batch shape.
+
+You will receive only failed items. For every supplied item:
+1. Return exactly one complete repaired item in the same order.
+2. Use the exact keys question, options, correctAnswer, explanation, wordTested, answerText.
+3. question must be a complete natural English sentence with exactly one visible blank: _____.
+4. options must contain exactly four complete and distinct lexical choices.
+5. Exactly one answer must be forced by explicit semantic evidence in the sentence.
+6. Preserve the assigned dictionary entry in wordTested.
+7. correctAnswer must be one bare letter A, B, C, or D; answerText must exactly match that option.
+8. explanation must be detailed Traditional Chinese and must identify the forcing clue and reject every distractor.
+9. Never omit a field. Never return placeholders. Never turn the item into an open question.
+10. Do not return items that were not supplied.`;
+
 async function repairVocabularyBatch(
   questions: ExamQuestion[],
   failedIndexes: number[],
@@ -1075,10 +1154,11 @@ AVAILABLE VOCABULARY
 ${formatVocabularyList(vocabList)}
 
 Return JSON only in this exact shape:
-{"vocabQuestions":[repaired item 1, repaired item 2, ...]}`;
+{"vocabQuestions":[repaired item 1, repaired item 2, ...]}
+Every repaired item MUST include all six exact keys: question, options, correctAnswer, explanation, wordTested, answerText. Never omit question. explanation must be Traditional Chinese.`;
 
   const raw = await callJsonModel<any>(
-    VOCAB_REVIEWER_SYSTEM,
+    VOCAB_TARGETED_BATCH_REPAIR_SYSTEM,
     prompt,
     vocabBatchSchema,
     0.08,
@@ -1092,7 +1172,7 @@ Return JSON only in this exact shape:
 
   const repaired = new Map<number, ExamQuestion>();
   failedIndexes.forEach((originalIndex, position) => {
-    repaired.set(originalIndex, normalizeQuestion(repairedRaw[position], "vocab"));
+    repaired.set(originalIndex, normalizeQuestion(repairedRaw[position], "vocab", questions[originalIndex]));
   });
   return repaired;
 }
@@ -1190,7 +1270,20 @@ Return {"readingPassages":[the complete repaired passage]} only.`;
   const passageRaw = Array.isArray(raw?.readingPassages)
     ? raw.readingPassages[0]
     : raw?.readingPassage ?? raw;
-  return normalizePassage(passageRaw);
+  const repaired = normalizePassage(passageRaw);
+  // Preserve complete original fields when an editorial response accidentally
+  // omits a field. Question-level normalization also accepts common aliases.
+  return {
+    level: repaired.level || passage.level,
+    title: repaired.title || passage.title,
+    passage: repaired.passage || passage.passage,
+    questions: Array.from({ length: Math.max(repaired.questions.length, passage.questions.length) }, (_, index) => {
+      const rawQuestion = Array.isArray(passageRaw?.questions) ? passageRaw.questions[index] : undefined;
+      return rawQuestion
+        ? normalizeQuestion(rawQuestion, "reading", passage.questions[index])
+        : repaired.questions[index] || passage.questions[index];
+    }).filter(Boolean),
+  };
 }
 
 async function buildReadingSection(
