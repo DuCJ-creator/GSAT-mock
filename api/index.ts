@@ -1293,63 +1293,19 @@ function chooseFallbackRequiredWords(vocabList: VocabularyInput[], count: number
   return shuffle(vocabList.map((item) => item.word).filter(Boolean)).slice(0, count);
 }
 
-async function planReadingPassage(
+function planReadingPassageLocally(
   level: string,
-  selectedLevel: number | string,
   vocabList: VocabularyInput[],
-): Promise<ReadingPlan> {
+): ReadingPlan {
   const count = readingRequiredWordCount(level, vocabList.length);
-  const sourceWords = vocabList.map((item) => item.word).filter(Boolean);
-  const fallbackWords = chooseFallbackRequiredWords(vocabList, count);
+  const requiredWords = chooseFallbackRequiredWords(vocabList, count);
 
-  if (sourceWords.length === 0) {
-    return {
-      topic: "A specific real-world issue appropriate for a GSAT reading passage",
-      angle: "Explain one concrete phenomenon through evidence, examples, and consequences",
-      genre: "informative magazine article",
-      requiredWords: [],
-    };
-  }
-
-  try {
-    const raw = await callJsonModel<any>(
-      READING_SEMANTIC_PLANNER_SYSTEM,
-      `Create one dynamic semantic plan for reading band "${level}" and GSAT Level ${selectedLevel || "mixed"}.\nSelect exactly ${count} required words from THIS request's vocabulary list.\n\nCURRENT VOCABULARY LIST\n${formatVocabularyList(vocabList)}\n\nThe plan must arise from these words. Do not write the passage yet.`,
-      readingPlanSchema,
-      0.55,
-    );
-
-    const allowed = new Map(sourceWords.map((word) => [normalizePlanWord(word), word]));
-    const requiredWords: string[] = [];
-    for (const item of Array.isArray(raw?.requiredWords) ? raw.requiredWords : []) {
-      const original = allowed.get(normalizePlanWord(item));
-      if (original && !requiredWords.some((word) => normalizePlanWord(word) === normalizePlanWord(original))) {
-        requiredWords.push(original);
-      }
-      if (requiredWords.length === count) break;
-    }
-    for (const word of fallbackWords) {
-      if (!requiredWords.some((item) => normalizePlanWord(item) === normalizePlanWord(word))) {
-        requiredWords.push(word);
-      }
-      if (requiredWords.length === count) break;
-    }
-
-    const topic = firstNonEmptyString(raw?.topic);
-    const angle = firstNonEmptyString(raw?.angle);
-    const genre = firstNonEmptyString(raw?.genre);
-    if (!topic || !angle || !genre) throw new Error("Semantic planner omitted a required field.");
-
-    return { topic, angle, genre, requiredWords };
-  } catch (error) {
-    console.warn("Reading semantic planner failed; using a vocabulary-grounded fallback:", error);
-    return {
-      topic: `A real-world situation connecting ${fallbackWords.slice(0, 3).join(", ")}`,
-      angle: "Develop one coherent event or issue in which the assigned vocabulary is naturally necessary",
-      genre: "informative human-interest article",
-      requiredWords: fallbackWords,
-    };
-  }
+  return {
+    topic: "DYNAMIC: infer one specific, coherent topic from the required vocabulary",
+    angle: "DYNAMIC: choose a concrete phenomenon, event, discovery, conflict, or human situation that naturally requires the assigned words",
+    genre: "authentic GSAT-style magazine, news-feature, historical, scientific, or human-interest article",
+    requiredWords,
+  };
 }
 
 function wordAppearsInPassage(passage: string, word: string): boolean {
@@ -1378,7 +1334,7 @@ async function generateReadingDraft(
   selectedLevel: number | string,
   plan: ReadingPlan,
 ): Promise<ReadingPassage> {
-  const prompt = `Create one reading passage for reading band "${level}" and GSAT Level ${selectedLevel || "mixed"}.\n\nDYNAMIC SEMANTIC PLAN FOR THIS REQUEST\nTopic: ${plan.topic}\nAngle: ${plan.angle}\nGenre: ${plan.genre}\nRequired vocabulary: ${plan.requiredWords.join(", ") || "none"}\n\nUse every required word naturally in the passage. Do not mention this planning process or mark the vocabulary typographically.\nReturn {"readingPassages":[one passage]} with exactly four questions.`;
+  const prompt = `Create one reading passage for reading band "${level}" and GSAT Level ${selectedLevel || "mixed"}.\n\nVOCABULARY-GROUNDED DYNAMIC PLANNING\nRequired vocabulary: ${plan.requiredWords.join(", ") || "none"}\n\nBefore writing, silently infer ONE specific and coherent topic from this exact vocabulary set. The topic must change when the vocabulary changes. Do not output a separate planning object.\n\nTOPIC RULES\n- Choose a concrete phenomenon, event, discovery, conflict, historical development, scientific finding, or human situation.\n- Do not use a generic title beginning with "The Importance of".\n- Do not default to sustainability, climate change, recycling, environmental protection, green energy, or pollution unless the required vocabulary clearly and directly supports that subject.\n- The article must be unified and authentic, not a sequence of unrelated sentences used merely to insert vocabulary.\n- Use every required word naturally and grammatically.\n- Do not mention this planning process or mark the vocabulary typographically.\n\nReturn {"readingPassages":[one passage]} with exactly four questions and Traditional Chinese explanations.`;
   const raw = await callJsonModel<any>(READING_WRITER_SYSTEM, prompt, readingSchema, 0.45);
   const passageRaw = Array.isArray(raw?.readingPassages)
     ? raw.readingPassages[0]
@@ -1417,8 +1373,9 @@ async function buildReadingSection(
   selectedLevel: number | string,
   vocabList: VocabularyInput[],
 ): Promise<ReadingPassage> {
-  // Three-call ceiling: a short semantic plan, one draft, and one editorial repair.
-  const plan = await planReadingPassage(level, selectedLevel, vocabList);
+  // Timeout-safe pipeline: local vocabulary selection, one draft call, and
+  // at most one targeted repair call only when deterministic validation fails.
+  const plan = planReadingPassageLocally(level, vocabList);
   const draft = await generateReadingDraft(level, selectedLevel, plan);
   const draftErrors = [
     ...validatePassage(draft),
@@ -1426,12 +1383,14 @@ async function buildReadingSection(
       .map((word) => `required vocabulary is missing from the passage: ${word}`),
   ];
 
-  let passage: ReadingPassage;
-  try {
-    passage = await repairReadingPassage(draft, draftErrors, level, plan);
-  } catch (error) {
-    console.warn("Reading editorial repair failed; validating the original draft:", error);
-    passage = draft;
+  let passage: ReadingPassage = draft;
+  if (draftErrors.length > 0) {
+    try {
+      passage = await repairReadingPassage(draft, draftErrors, level, plan);
+    } catch (error) {
+      console.warn("Reading targeted repair failed; keeping the complete draft with review warnings:", error);
+      passage = draft;
+    }
   }
 
   if (!passage.title || !passage.passage || passage.questions.length !== 4) {
@@ -1591,17 +1550,20 @@ app.post("/api/generate", async (req, res) => {
 
     const data: ExamData = {};
 
-    if (wantsVocab) {
-      data.vocabQuestions = await buildVocabularySection(cleanVocabList, selectedLevel);
-    }
+    // Vocabulary and reading are independent. Run them concurrently so selecting
+    // both does not make the serverless request wait for one full pipeline before
+    // starting the other.
+    const [vocabQuestions, readingPassage] = await Promise.all([
+      wantsVocab
+        ? buildVocabularySection(cleanVocabList, selectedLevel)
+        : Promise.resolve(undefined),
+      wantsReading
+        ? buildReadingSection(String(selectedReadingLevels[0]), selectedLevel, cleanVocabList)
+        : Promise.resolve(undefined),
+    ]);
 
-    if (wantsReading) {
-      // The frontend currently calls this endpoint once per selected reading
-      // level, so return exactly one passage for the first requested level.
-      data.readingPassages = [
-        await buildReadingSection(String(selectedReadingLevels[0]), selectedLevel, cleanVocabList),
-      ];
-    }
+    if (vocabQuestions) data.vocabQuestions = vocabQuestions;
+    if (readingPassage) data.readingPassages = [readingPassage];
 
     const finalData = addIds(data);
     const finalValidationErrors = validateExamData(finalData);
@@ -1619,9 +1581,9 @@ app.post("/api/generate", async (req, res) => {
         itemLevelWarningsAreNonBlocking: true,
 
         // Item Generation Engine diagnostics.
-        engineVersion: "4.1.0-dynamic-reading-semantic-plan",
+        engineVersion: "4.2.0-timeout-safe-dynamic-reading",
         pipeline: [
-          "dynamic-reading-semantic-plan",
+          "local-vocabulary-grounded-topic-planning",
           "generate",
           "normalize",
           "deterministic-validate",
