@@ -141,6 +141,13 @@ type ReadingPassage = {
   questions: ExamQuestion[];
 };
 
+type ReadingPlan = {
+  topic: string;
+  angle: string;
+  genre: string;
+  requiredWords: string[];
+};
+
 type ExamData = {
   vocabQuestions?: ExamQuestion[];
   readingPassages?: ReadingPassage[];
@@ -569,6 +576,17 @@ const readingSchema = {
   required: ["readingPassages"],
 };
 
+const readingPlanSchema = {
+  type: Type.OBJECT,
+  properties: {
+    topic: { type: Type.STRING },
+    angle: { type: Type.STRING },
+    genre: { type: Type.STRING },
+    requiredWords: { type: Type.ARRAY, items: { type: Type.STRING } },
+  },
+  required: ["topic", "angle", "genre", "requiredWords"],
+};
+
 // -----------------------------------------------------------------------------
 // Prompts
 // -----------------------------------------------------------------------------
@@ -774,11 +792,28 @@ async function auditVocabularySetForManualReview(questions: ExamQuestion[]): Pro
   }
 }
 
+const READING_SEMANTIC_PLANNER_SYSTEM = `You are a semantic planner for Taiwan GSAT reading passages.
+Return JSON only.
+
+Your job is NOT to write the passage. Infer one fresh, coherent topic from the vocabulary supplied for this request.
+
+RULES
+1. The topic must naturally accommodate the required vocabulary; never force unrelated words into an artificial article.
+2. Do not default to sustainability, environmental protection, recycling, climate change, green energy, or pollution. Use an environmental topic only when several supplied words clearly point to it.
+3. Prefer a specific angle suitable for an authentic magazine, science, history, culture, psychology, technology, social-science, biography, or human-interest article.
+4. Avoid vague titles such as "The Importance of ...". Choose a concrete phenomenon, event, problem, discovery, practice, or debate.
+5. Select the requested number of words from the supplied list that can coexist naturally in one passage. Keep their spelling exactly as supplied in requiredWords.
+6. Make the plan appropriate for the requested reading band and GSAT level.
+7. Return exactly: topic, angle, genre, requiredWords.`;
+
 const READING_WRITER_SYSTEM = `You are a professional Taiwan GSAT reading-comprehension item writer.
 Return JSON only.
 
 RULES
-1. Write one natural English passage of about 200-250 words at the requested level.
+1. Write one natural English passage of about 200-250 words at the requested level and follow the supplied semantic plan.
+1a. Use every supplied required word naturally and accurately in the passage. Ordinary grammatical inflections are allowed, but do not replace the assigned lexeme with a synonym.
+1b. The passage must be unified and authentic, not a list of unrelated sentences created merely to insert vocabulary.
+1c. Do not change the assigned topic into sustainability, climate change, recycling, environmental protection, green energy, or pollution unless the semantic plan explicitly chose that topic.
 2. Write exactly four questions covering main idea, detail, inference/tone, and vocabulary in context.
 3. Each question must have exactly one defensible answer supported by explicit text or a necessary inference.
 4. Distractors must be clearly false, unsupported, too broad, too narrow, opposite, or based on a misreading.
@@ -1244,10 +1279,107 @@ async function buildVocabularySection(
 // Reading generation and repair
 // -----------------------------------------------------------------------------
 
-async function generateReadingDraft(level: string, selectedLevel: number | string): Promise<ReadingPassage> {
-  const prompt = `Create one reading passage for reading band "${level}" and GSAT Level ${selectedLevel || "mixed"}.
-Return {"readingPassages":[one passage]} with exactly four questions.`;
-  const raw = await callJsonModel<any>(READING_WRITER_SYSTEM, prompt, readingSchema, 0.35);
+function readingRequiredWordCount(level: string, available: number): number {
+  const normalized = level.toLowerCase();
+  const target = normalized.includes("advanced") ? 9 : normalized.includes("essential") ? 7 : 5;
+  return Math.min(Math.max(1, target), available);
+}
+
+function normalizePlanWord(value: unknown): string {
+  return String(value ?? "").trim().toLowerCase();
+}
+
+function chooseFallbackRequiredWords(vocabList: VocabularyInput[], count: number): string[] {
+  return shuffle(vocabList.map((item) => item.word).filter(Boolean)).slice(0, count);
+}
+
+async function planReadingPassage(
+  level: string,
+  selectedLevel: number | string,
+  vocabList: VocabularyInput[],
+): Promise<ReadingPlan> {
+  const count = readingRequiredWordCount(level, vocabList.length);
+  const sourceWords = vocabList.map((item) => item.word).filter(Boolean);
+  const fallbackWords = chooseFallbackRequiredWords(vocabList, count);
+
+  if (sourceWords.length === 0) {
+    return {
+      topic: "A specific real-world issue appropriate for a GSAT reading passage",
+      angle: "Explain one concrete phenomenon through evidence, examples, and consequences",
+      genre: "informative magazine article",
+      requiredWords: [],
+    };
+  }
+
+  try {
+    const raw = await callJsonModel<any>(
+      READING_SEMANTIC_PLANNER_SYSTEM,
+      `Create one dynamic semantic plan for reading band "${level}" and GSAT Level ${selectedLevel || "mixed"}.\nSelect exactly ${count} required words from THIS request's vocabulary list.\n\nCURRENT VOCABULARY LIST\n${formatVocabularyList(vocabList)}\n\nThe plan must arise from these words. Do not write the passage yet.`,
+      readingPlanSchema,
+      0.55,
+    );
+
+    const allowed = new Map(sourceWords.map((word) => [normalizePlanWord(word), word]));
+    const requiredWords: string[] = [];
+    for (const item of Array.isArray(raw?.requiredWords) ? raw.requiredWords : []) {
+      const original = allowed.get(normalizePlanWord(item));
+      if (original && !requiredWords.some((word) => normalizePlanWord(word) === normalizePlanWord(original))) {
+        requiredWords.push(original);
+      }
+      if (requiredWords.length === count) break;
+    }
+    for (const word of fallbackWords) {
+      if (!requiredWords.some((item) => normalizePlanWord(item) === normalizePlanWord(word))) {
+        requiredWords.push(word);
+      }
+      if (requiredWords.length === count) break;
+    }
+
+    const topic = firstNonEmptyString(raw?.topic);
+    const angle = firstNonEmptyString(raw?.angle);
+    const genre = firstNonEmptyString(raw?.genre);
+    if (!topic || !angle || !genre) throw new Error("Semantic planner omitted a required field.");
+
+    return { topic, angle, genre, requiredWords };
+  } catch (error) {
+    console.warn("Reading semantic planner failed; using a vocabulary-grounded fallback:", error);
+    return {
+      topic: `A real-world situation connecting ${fallbackWords.slice(0, 3).join(", ")}`,
+      angle: "Develop one coherent event or issue in which the assigned vocabulary is naturally necessary",
+      genre: "informative human-interest article",
+      requiredWords: fallbackWords,
+    };
+  }
+}
+
+function wordAppearsInPassage(passage: string, word: string): boolean {
+  const escaped = word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const exact = new RegExp(`\\b${escaped}\\b`, "i");
+  if (exact.test(passage)) return true;
+
+  // Conservative support for ordinary English inflections. This is only a
+  // usage check; the model remains responsible for grammatical correctness.
+  const base = normalizePlanWord(word).replace(/[^a-z-]/g, "");
+  if (!base || base.includes("-")) return false;
+  const variants = [
+    `${base}s`, `${base}es`, `${base}ed`, `${base}ing`,
+    base.endsWith("y") ? `${base.slice(0, -1)}ies` : "",
+    base.endsWith("y") ? `${base.slice(0, -1)}ied` : "",
+  ].filter(Boolean);
+  return variants.some((variant) => new RegExp(`\\b${variant}\\b`, "i").test(passage));
+}
+
+function missingRequiredReadingWords(passage: string, requiredWords: string[]): string[] {
+  return requiredWords.filter((word) => !wordAppearsInPassage(passage, word));
+}
+
+async function generateReadingDraft(
+  level: string,
+  selectedLevel: number | string,
+  plan: ReadingPlan,
+): Promise<ReadingPassage> {
+  const prompt = `Create one reading passage for reading band "${level}" and GSAT Level ${selectedLevel || "mixed"}.\n\nDYNAMIC SEMANTIC PLAN FOR THIS REQUEST\nTopic: ${plan.topic}\nAngle: ${plan.angle}\nGenre: ${plan.genre}\nRequired vocabulary: ${plan.requiredWords.join(", ") || "none"}\n\nUse every required word naturally in the passage. Do not mention this planning process or mark the vocabulary typographically.\nReturn {"readingPassages":[one passage]} with exactly four questions.`;
+  const raw = await callJsonModel<any>(READING_WRITER_SYSTEM, prompt, readingSchema, 0.45);
   const passageRaw = Array.isArray(raw?.readingPassages)
     ? raw.readingPassages[0]
     : raw?.readingPassage ?? raw;
@@ -1258,21 +1390,15 @@ async function repairReadingPassage(
   passage: ReadingPassage,
   errors: string[],
   level: string,
+  plan: ReadingPlan,
 ): Promise<ReadingPassage> {
-  const prompt = `Repair this complete "${level}" reading set.
-Detected deterministic problems: ${errors.join("; ") || "none; perform full semantic audit anyway"}.
-
-DRAFT
-${JSON.stringify({ readingPassages: [passage] })}
-
-Return {"readingPassages":[the complete repaired passage]} only.`;
+  const missingWords = missingRequiredReadingWords(passage.passage, plan.requiredWords);
+  const prompt = `Repair this complete "${level}" reading set while preserving its dynamic semantic plan.\n\nSEMANTIC PLAN\nTopic: ${plan.topic}\nAngle: ${plan.angle}\nGenre: ${plan.genre}\nRequired vocabulary: ${plan.requiredWords.join(", ") || "none"}\n\nDetected deterministic problems: ${errors.join("; ") || "none; perform full semantic audit anyway"}.\nWords still missing from the passage: ${missingWords.join(", ") || "none"}.\n\nRequirements:\n- Keep one coherent article built around the assigned topic and angle.\n- Naturally include every required word.\n- Do not shift to a generic sustainability/environmental theme unless that is the assigned topic.\n- Keep explanations in Traditional Chinese.\n\nDRAFT\n${JSON.stringify({ readingPassages: [passage] })}\n\nReturn {"readingPassages":[the complete repaired passage]} only.`;
   const raw = await callJsonModel<any>(READING_REVIEWER_SYSTEM, prompt, readingSchema, 0.08);
   const passageRaw = Array.isArray(raw?.readingPassages)
     ? raw.readingPassages[0]
     : raw?.readingPassage ?? raw;
   const repaired = normalizePassage(passageRaw);
-  // Preserve complete original fields when an editorial response accidentally
-  // omits a field. Question-level normalization also accepts common aliases.
   return {
     level: repaired.level || passage.level,
     title: repaired.title || passage.title,
@@ -1289,21 +1415,25 @@ Return {"readingPassages":[the complete repaired passage]} only.`;
 async function buildReadingSection(
   level: string,
   selectedLevel: number | string,
+  vocabList: VocabularyInput[],
 ): Promise<ReadingPassage> {
-  // Fixed two-call ceiling: one draft + one complete editorial repair.
-  const draft = await generateReadingDraft(level, selectedLevel);
-  const draftErrors = validatePassage(draft);
+  // Three-call ceiling: a short semantic plan, one draft, and one editorial repair.
+  const plan = await planReadingPassage(level, selectedLevel, vocabList);
+  const draft = await generateReadingDraft(level, selectedLevel, plan);
+  const draftErrors = [
+    ...validatePassage(draft),
+    ...missingRequiredReadingWords(draft.passage, plan.requiredWords)
+      .map((word) => `required vocabulary is missing from the passage: ${word}`),
+  ];
 
   let passage: ReadingPassage;
   try {
-    passage = await repairReadingPassage(draft, draftErrors, level);
+    passage = await repairReadingPassage(draft, draftErrors, level, plan);
   } catch (error) {
     console.warn("Reading editorial repair failed; validating the original draft:", error);
     passage = draft;
   }
 
-  // A missing passage or wrong question count cannot be safely represented as
-  // a usable test and must never be replaced with placeholder content.
   if (!passage.title || !passage.passage || passage.questions.length !== 4) {
     throw new Error(
       "Reading generation did not produce one complete passage with exactly four questions. Please retry.",
@@ -1311,7 +1441,11 @@ async function buildReadingSection(
   }
 
   passage.questions = balanceQuestions(passage.questions);
-  const passageErrors = validatePassage(passage);
+  const passageErrors = [
+    ...validatePassage(passage),
+    ...missingRequiredReadingWords(passage.passage, plan.requiredWords)
+      .map((word) => `required vocabulary is missing from the passage: ${word}`),
+  ];
 
   passage.questions = passage.questions.map((question, index) => {
     const prefix = `Q${index + 1}: `;
@@ -1324,8 +1458,6 @@ async function buildReadingSection(
     return attachReviewMetadata(question, warnings);
   });
 
-  // Passage-level length is a non-blocking editorial warning; attach it to all
-  // four items so the teacher can see it without losing the generated set.
   const globalWarnings = passageErrors.filter((error) => !/^Q\d+:/.test(error));
   if (globalWarnings.length > 0) {
     passage.questions = passage.questions.map((question) =>
@@ -1467,7 +1599,7 @@ app.post("/api/generate", async (req, res) => {
       // The frontend currently calls this endpoint once per selected reading
       // level, so return exactly one passage for the first requested level.
       data.readingPassages = [
-        await buildReadingSection(String(selectedReadingLevels[0]), selectedLevel),
+        await buildReadingSection(String(selectedReadingLevels[0]), selectedLevel, cleanVocabList),
       ];
     }
 
@@ -1487,8 +1619,9 @@ app.post("/api/generate", async (req, res) => {
         itemLevelWarningsAreNonBlocking: true,
 
         // Item Generation Engine diagnostics.
-        engineVersion: "4.0.0-targeted-repair",
+        engineVersion: "4.1.0-dynamic-reading-semantic-plan",
         pipeline: [
+          "dynamic-reading-semantic-plan",
           "generate",
           "normalize",
           "deterministic-validate",
