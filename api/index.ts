@@ -962,9 +962,18 @@ function selectTargetVocabulary(vocabList: VocabularyInput[], count: number): Vo
 
   // Sample from the entire supplied range before sending anything to the model.
   // This prevents positional bias toward words appearing near the top of the list.
+  // De-duplicate the source first so a repeated row in the uploaded list does
+  // not assign the same target twice while unused words are still available.
+  const uniqueVocab = Array.from(
+    new Map(
+      vocabList.map((item) => [optionLexemeKey(item.word), item] as const),
+    ).values(),
+  ).filter((item) => optionLexemeKey(item.word));
+  if (uniqueVocab.length === 0) return [];
+
   const selected: VocabularyInput[] = [];
   while (selected.length < count) {
-    const round = shuffle(vocabList);
+    const round = shuffle(uniqueVocab);
     for (const item of round) {
       selected.push(item);
       if (selected.length === count) break;
@@ -1032,6 +1041,30 @@ function suiteDuplicateOptions(questions: ExamQuestion[]): string[] {
   });
 
   return duplicates;
+}
+
+function suiteDuplicateQuestionIndexes(questions: ExamQuestion[]): number[] {
+  const firstQuestionByKey = new Map<string, number>();
+  const duplicateIndexes = new Set<number>();
+
+  questions.forEach((question, qIndex) => {
+    question.options.forEach((option) => {
+      const key = optionLexemeKey(option);
+      if (!key) return;
+      const firstIndex = firstQuestionByKey.get(key);
+      if (firstIndex == null) firstQuestionByKey.set(key, qIndex);
+      else {
+        duplicateIndexes.add(firstIndex);
+        duplicateIndexes.add(qIndex);
+      }
+    });
+  });
+
+  return [...duplicateIndexes].sort((a, b) => a - b);
+}
+
+function uniqueVocabularyOptionCount(vocabList: VocabularyInput[]): number {
+  return new Set(vocabList.map((item) => optionLexemeKey(item.word)).filter(Boolean)).size;
 }
 
 function formatForbiddenOptions(questions: ExamQuestion[]): string {
@@ -1105,11 +1138,13 @@ MANDATORY RULES
 7. Keep wordTested as the assigned lemma and set answerText to the exact keyed option text.
 8. Explanations must be Traditional Chinese, cite the exact clue, and explain why all distractors fail.
 9. Do not reuse malformed or truncated words.
-10. Keep exactly ten items and return {"vocabQuestions":[...]}.`;
+10. Across the complete set, never reuse an option word or an ordinary inflection of the same lexeme while unused words remain in the supplied vocabulary range. Correct answers and distractors both count. Repeated options are allowed only after the available vocabulary has genuinely been exhausted.
+11. Keep exactly ten items and return {"vocabQuestions":[...]}.`;
 
 async function reviewVocabularyBatch(
   questions: ExamQuestion[],
   targetWords: VocabularyInput[],
+  vocabList: VocabularyInput[],
   selectedLevel: number | string,
 ): Promise<ExamQuestion[]> {
   const assignments = targetWords.map((item, index) => ({
@@ -1120,7 +1155,7 @@ async function reviewVocabularyBatch(
   }));
   const raw = await callJsonModel<any>(
     VOCAB_BATCH_REVIEWER_SYSTEM,
-    `Repair this Level ${selectedLevel || "mixed"} ten-question set in one pass.\nTARGET ASSIGNMENTS:\n${JSON.stringify(assignments)}\nDRAFT SET:\n${JSON.stringify({ vocabQuestions: questions })}`,
+    `Repair this Level ${selectedLevel || "mixed"} ten-question set in one pass.\nTARGET ASSIGNMENTS:\n${JSON.stringify(assignments)}\n\nFULL VOCABULARY RANGE (use unused entries before repeating any option):\n${formatVocabularyList(vocabList)}\n\nDETECTED CROSS-QUESTION DUPLICATES:\n${suiteDuplicateOptions(questions).join("\n") || "none"}\n\nDRAFT SET:\n${JSON.stringify({ vocabQuestions: questions })}`,
     vocabBatchSchema,
     0.05,
   );
@@ -1267,7 +1302,9 @@ You will receive only failed items. For every supplied item:
 7. correctAnswer must be one bare letter A, B, C, or D; answerText must exactly match that option.
 8. explanation must be detailed Traditional Chinese and must identify the forcing clue and reject every distractor.
 9. Never omit a field. Never return placeholders. Never turn the item into an open question.
-10. Do not return items that were not supplied.`;
+10. Across all supplied items, do not reuse an option lexeme. Also do not use a lexeme listed as reserved by an unchanged item. Ordinary inflections count as the same lexeme.
+11. Reuse is permitted only if the supplied vocabulary range has no unused lexical item left.
+12. Do not return items that were not supplied.`;
 
 async function repairVocabularyBatch(
   questions: ExamQuestion[],
@@ -1287,9 +1324,16 @@ async function repairVocabularyBatch(
       ...(!sameLemma(questions[index].wordTested, targetWords[index].word)
         ? [`wordTested must match assigned target "${targetWords[index].word}"`]
         : []),
+      ...suiteDuplicateOptions(questions)
+        .filter((problem) => problem.startsWith(`Q${index + 1} `)),
     ],
     draft: questions[index],
   }));
+
+  const failedIndexSet = new Set(failedIndexes);
+  const reservedOptions = questions
+    .filter((_, index) => !failedIndexSet.has(index))
+    .flatMap((question) => question.options.map(stripOptionLabel));
 
   const prompt = `Repair ONLY the failed vocabulary items below for GSAT Level ${selectedLevel || "mixed"}.
 Return exactly one repaired item for every supplied index, in the same order.
@@ -1300,12 +1344,17 @@ MANDATORY RULES
 - Keep a genuine one-sentence gap-filling item with exactly one visible blank: _____.
 - Add an explicit semantic lock so only one option is defensible.
 - Use four different lexical items; all displayed forms must fit the grammatical slot.
+- Across every repaired item, do not repeat any option word or inflected form of the same lexeme.
+- Do not use any option lexeme reserved by an unchanged item. Choose unused entries from AVAILABLE VOCABULARY first.
 - Independently solve the repaired item and set correctAnswer and answerText correctly.
 - The Traditional Chinese explanation must identify the forcing clue and explain why all distractors fail.
 - Never use placeholders or open-ended question formats.
 
 FAILED ITEMS
 ${JSON.stringify(failedItems)}
+
+OPTIONS RESERVED BY UNCHANGED ITEMS
+${reservedOptions.map((option) => `- ${option}`).join("\n") || "(none)"}
 
 AVAILABLE VOCABULARY
 ${formatVocabularyList(vocabList)}
@@ -1359,16 +1408,21 @@ async function buildVocabularySection(
 
   // Fast-quality pipeline:
   // 1 model call: generate all 10 items.
-  // 0-1 model call: repair only items rejected by deterministic validation.
-  // No per-item morphology calls and no extra whole-set AI audit.
+  // 0-1 model call: repair items rejected by item or suite-wide validation.
+  // 0-1 final whole-set call only when the distinct-option quota is still missed.
+  // No per-item morphology calls.
   const questions = await generateVocabularyDraft(targetWords, vocabList, selectedLevel);
   if (questions.length !== targetWords.length) {
     throw new Error(`Vocabulary draft returned ${questions.length} items; expected ${targetWords.length}.`);
   }
 
-  const failedIndexes = questions
+  const itemFailureIndexes = questions
     .map((question, index) => vocabularyWarningsFor(question, targetWords[index]).length ? index : -1)
     .filter((index) => index >= 0);
+  const failedIndexes = Array.from(new Set([
+    ...itemFailureIndexes,
+    ...suiteDuplicateQuestionIndexes(questions),
+  ])).sort((a, b) => a - b);
 
   let merged = [...questions];
   if (failedIndexes.length > 0) {
@@ -1386,6 +1440,23 @@ async function buildVocabularySection(
       // teacher review. One failed repair request never discards the whole paper.
       console.warn("Failed-item vocabulary repair failed; keeping flagged drafts:", error);
     }
+  }
+
+
+  // A prompt is guidance, not a guarantee. Re-check the complete set after the
+  // targeted repair. The required number of distinct choices is capped by the
+  // uploaded pool, so reuse becomes legal only after that pool is exhausted.
+  const optionSlots = merged.length * 4;
+  const requiredUniqueOptions = Math.min(optionSlots, uniqueVocabularyOptionCount(vocabList));
+  if (usedOptionKeys(merged).size < requiredUniqueOptions) {
+    merged = await reviewVocabularyBatch(merged, targetWords, vocabList, selectedLevel);
+  }
+
+  const unresolvedDuplicates = suiteDuplicateOptions(merged);
+  if (usedOptionKeys(merged).size < requiredUniqueOptions) {
+    throw new Error(
+      `Vocabulary option uniqueness check failed after repair: expected at least ${requiredUniqueOptions} distinct option lexemes; ${unresolvedDuplicates.join("; ")}`,
+    );
   }
 
   const balanced = balanceQuestions(merged);
@@ -1703,7 +1774,7 @@ app.post("/api/generate", async (req, res) => {
         itemLevelWarningsAreNonBlocking: true,
 
         // Item Generation Engine diagnostics.
-        engineVersion: "5.0.0-structured-json-timeout-safe",
+        engineVersion: "5.1.0-suite-wide-option-uniqueness",
         pipeline: [
           "local-vocabulary-grounded-topic-planning",
           "generate",
@@ -1711,6 +1782,8 @@ app.post("/api/generate", async (req, res) => {
           "deterministic-validate",
           "deterministic-failed-item-detection",
           "single-batch-targeted-repair",
+          "suite-wide-option-uniqueness-check",
+          "whole-set-uniqueness-repair-if-needed",
           "manual-review-for-unresolved-items",
           "move-correct-option",
           "balanced-unpredictable-placement",
