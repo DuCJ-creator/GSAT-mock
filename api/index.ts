@@ -1449,21 +1449,29 @@ async function buildVocabularySection(
   const optionSlots = merged.length * 4;
   const requiredUniqueOptions = Math.min(optionSlots, uniqueVocabularyOptionCount(vocabList));
   if (usedOptionKeys(merged).size < requiredUniqueOptions) {
-    merged = await reviewVocabularyBatch(merged, targetWords, vocabList, selectedLevel);
-  }
-
-  const unresolvedDuplicates = suiteDuplicateOptions(merged);
-  if (usedOptionKeys(merged).size < requiredUniqueOptions) {
-    throw new Error(
-      `Vocabulary option uniqueness check failed after repair: expected at least ${requiredUniqueOptions} distinct option lexemes; ${unresolvedDuplicates.join("; ")}`,
-    );
+    try {
+      merged = await reviewVocabularyBatch(merged, targetWords, vocabList, selectedLevel);
+    } catch (error) {
+      // Uniqueness is an editorial preference, not a reason to discard an
+      // otherwise usable paper. Keep the best available set and route any
+      // remaining repetition to the existing manual-review workflow.
+      console.warn("Whole-set option-uniqueness repair failed; keeping items for manual review:", error);
+    }
   }
 
   const balanced = balanceQuestions(merged);
+  const unresolvedDuplicates = suiteDuplicateOptions(balanced);
   return balanced.map((question, index) =>
     attachReviewMetadata(
       question,
-      vocabularyWarningsFor(question, targetWords[index]),
+      [
+        ...vocabularyWarningsFor(question, targetWords[index]),
+        ...unresolvedDuplicates
+          .filter((warning) => warning.startsWith(`Q${index + 1} `))
+          .map((warning) =>
+            `suite-wide repeated option; please review manually (${warning})`,
+          ),
+      ],
     ),
   );
 }
@@ -1774,7 +1782,7 @@ app.post("/api/generate", async (req, res) => {
         itemLevelWarningsAreNonBlocking: true,
 
         // Item Generation Engine diagnostics.
-        engineVersion: "5.1.0-suite-wide-option-uniqueness",
+        engineVersion: "5.1.1-option-uniqueness-human-review-fallback",
         pipeline: [
           "local-vocabulary-grounded-topic-planning",
           "generate",
@@ -1784,6 +1792,7 @@ app.post("/api/generate", async (req, res) => {
           "single-batch-targeted-repair",
           "suite-wide-option-uniqueness-check",
           "whole-set-uniqueness-repair-if-needed",
+          "nonblocking-manual-review-for-unresolved-repetition",
           "manual-review-for-unresolved-items",
           "move-correct-option",
           "balanced-unpredictable-placement",
