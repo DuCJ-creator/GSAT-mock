@@ -315,11 +315,12 @@ function normalizeOptions(value: unknown): string[] {
     return stripOptionLabel(item);
   });
 
-  if (texts.length !== 4 || texts.some((text) => !text)) {
-    throw new Error("Each question must contain exactly four non-empty options.");
-  }
-
-  return texts.map((text, index) => `(${LETTERS[index]}) ${text}`);
+  // Keep incomplete model output long enough for deterministic validation to
+  // identify the affected item and send it through the repair pipeline. An
+  // exception here used to abort the entire paper before repair could run.
+  return texts.map((text, index) =>
+    index < LETTERS.length ? `(${LETTERS[index]}) ${text}` : text,
+  );
 }
 
 function optionTexts(options: unknown): string[] {
@@ -523,6 +524,17 @@ function validateQuestion(question: ExamQuestion, kind: "vocab" | "reading"): st
   }
 
   return errors;
+}
+
+function hasIncompleteQuestionStructure(question: ExamQuestion): boolean {
+  const texts = question.options.map(stripOptionLabel);
+  const answerIndex = LETTERS.indexOf(question.correctAnswer);
+  return (
+    question.options.length !== 4 ||
+    texts.some((text) => !text) ||
+    answerIndex < 0 ||
+    !texts[answerIndex]
+  );
 }
 
 
@@ -1448,15 +1460,30 @@ async function buildVocabularySection(
   // uploaded pool, so reuse becomes legal only after that pool is exhausted.
   const optionSlots = merged.length * 4;
   const requiredUniqueOptions = Math.min(optionSlots, uniqueVocabularyOptionCount(vocabList));
-  if (usedOptionKeys(merged).size < requiredUniqueOptions) {
+  if (
+    merged.some(hasIncompleteQuestionStructure) ||
+    usedOptionKeys(merged).size < requiredUniqueOptions
+  ) {
     try {
       merged = await reviewVocabularyBatch(merged, targetWords, vocabList, selectedLevel);
     } catch (error) {
       // Uniqueness is an editorial preference, not a reason to discard an
       // otherwise usable paper. Keep the best available set and route any
       // remaining repetition to the existing manual-review workflow.
-      console.warn("Whole-set option-uniqueness repair failed; keeping items for manual review:", error);
+      console.warn("Whole-set vocabulary repair failed; keeping items for manual review:", error);
     }
+  }
+
+  // Missing choices cannot be represented as a usable multiple-choice item.
+  // Soft editorial issues remain nonblocking, but structural defects get two
+  // repair opportunities before the request asks the user to retry.
+  const incompleteIndexes = merged
+    .map((question, index) => hasIncompleteQuestionStructure(question) ? index + 1 : -1)
+    .filter((index) => index > 0);
+  if (incompleteIndexes.length > 0) {
+    throw new Error(
+      `The AI could not complete four valid options for vocabulary question(s) ${incompleteIndexes.join(", ")} after automatic repair. Please retry generation.`,
+    );
   }
 
   const balanced = balanceQuestions(merged);
@@ -1574,8 +1601,8 @@ async function buildReadingSection(
   selectedLevel: number | string,
   vocabList: VocabularyInput[],
 ): Promise<ReadingPassage> {
-  // Timeout-safe pipeline: local vocabulary selection, one draft call, and
-  // at most one targeted repair call only when deterministic validation fails.
+  // Timeout-safe pipeline: local vocabulary selection, one draft call, one
+  // targeted repair, and a second call only for unresolved structural defects.
   const plan = planReadingPassageLocally(level, vocabList);
   const draft = await generateReadingDraft(level, selectedLevel, plan);
   const draftErrors = [
@@ -1594,9 +1621,33 @@ async function buildReadingSection(
     }
   }
 
-  if (!passage.title || !passage.passage || passage.questions.length !== 4) {
+  const remainingReadingErrors = validatePassage(passage);
+  const needsStructuralReadingRetry =
+    !passage.title ||
+    !passage.passage ||
+    passage.questions.length !== 4 ||
+    passage.questions.some(hasIncompleteQuestionStructure);
+  if (needsStructuralReadingRetry) {
+    try {
+      passage = await repairReadingPassage(
+        passage,
+        remainingReadingErrors,
+        level,
+        plan,
+      );
+    } catch (error) {
+      console.warn("Reading structural retry failed:", error);
+    }
+  }
+
+  if (
+    !passage.title ||
+    !passage.passage ||
+    passage.questions.length !== 4 ||
+    passage.questions.some(hasIncompleteQuestionStructure)
+  ) {
     throw new Error(
-      "Reading generation did not produce one complete passage with exactly four questions. Please retry.",
+      "Reading generation still contains an incomplete question after automatic repair. Please retry.",
     );
   }
 
@@ -1782,14 +1833,16 @@ app.post("/api/generate", async (req, res) => {
         itemLevelWarningsAreNonBlocking: true,
 
         // Item Generation Engine diagnostics.
-        engineVersion: "5.1.1-option-uniqueness-human-review-fallback",
+        engineVersion: "5.1.2-incomplete-option-auto-repair",
         pipeline: [
           "local-vocabulary-grounded-topic-planning",
           "generate",
           "normalize",
           "deterministic-validate",
           "deterministic-failed-item-detection",
+          "lenient-incomplete-option-capture",
           "single-batch-targeted-repair",
+          "structural-repair-retry",
           "suite-wide-option-uniqueness-check",
           "whole-set-uniqueness-repair-if-needed",
           "nonblocking-manual-review-for-unresolved-repetition",
