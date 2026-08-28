@@ -22,10 +22,82 @@ body {
 
 /* Print Overrides to ensure gorgeous worksheets and keys */
 @media print {
+  @page {
+    size: A4;
+    margin: 12mm;
+  }
+
   body {
     background-color: #ffffff !important;
     color: #000000 !important;
     font-size: 11pt !important;
+  }
+
+  /*
+   * Printer-safe output profile.
+   * Avoid browser compositing features that some PDF/PostScript drivers encode
+   * as an unsupported `image` command. Screen styling remains unchanged.
+   */
+  html.printer-safe-output,
+  html.printer-safe-output body,
+  html.printer-safe-output #root,
+  html.printer-safe-output #worksheet-view,
+  html.printer-safe-output #printable-paper {
+    background: #ffffff !important;
+    background-image: none !important;
+    color: #000000 !important;
+    filter: none !important;
+    backdrop-filter: none !important;
+    box-shadow: none !important;
+    text-shadow: none !important;
+  }
+
+  html.printer-safe-output #printable-paper {
+    position: static !important;
+    width: 100% !important;
+    max-width: none !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    border: 0 !important;
+    border-radius: 0 !important;
+    overflow: visible !important;
+    font-family: "Times New Roman", Times, serif !important;
+    -webkit-print-color-adjust: economy !important;
+    print-color-adjust: economy !important;
+  }
+
+  html.printer-safe-output #printable-paper *,
+  html.printer-safe-output #printable-paper *::before,
+  html.printer-safe-output #printable-paper *::after {
+    background-color: transparent !important;
+    background-image: none !important;
+    color: #000000 !important;
+    box-shadow: none !important;
+    text-shadow: none !important;
+    filter: none !important;
+    backdrop-filter: none !important;
+    transform: none !important;
+    animation: none !important;
+    transition: none !important;
+    opacity: 1 !important;
+    mix-blend-mode: normal !important;
+  }
+
+  html.printer-safe-output svg,
+  html.printer-safe-output img,
+  html.printer-safe-output picture,
+  html.printer-safe-output canvas,
+  html.printer-safe-output video {
+    display: none !important;
+  }
+
+  html.printer-safe-output #printable-paper table {
+    border-collapse: collapse !important;
+  }
+
+  html.printer-safe-output #printable-paper th,
+  html.printer-safe-output #printable-paper td {
+    border-color: #666666 !important;
   }
   
   .no-print {
