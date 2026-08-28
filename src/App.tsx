@@ -952,6 +952,7 @@ export default function App() {
             report={activeReport}
             suite={examSuite}
             onRestart={() => { setExamSuite(null); setActiveTab("lobby"); }}
+            onReviewExam={() => setActiveTab("player")}
             onGoToWorksheet={() => setActiveTab("worksheet")}
           />
         )}
