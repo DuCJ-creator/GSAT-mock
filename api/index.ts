@@ -1441,6 +1441,7 @@ async function repairVocabularyBatch(
     problems: [
       ...validateQuestion(questions[index], "vocab"),
       ...deterministicVocabularyWarnings(questions[index]),
+      ...deterministicOpenWorldWarnings(questions[index]),
       ...assignedOptionWarnings(questions[index], assignments[index]),
       ...(!sameLemma(questions[index].wordTested, assignments[index].target.word)
         ? [`wordTested must match assigned target "${assignments[index].target.word}"`]
@@ -1511,12 +1512,29 @@ function vocabularyWarningsFor(
   const warnings = [
     ...validateQuestion(question, "vocab"),
     ...deterministicVocabularyWarnings(question),
+    ...deterministicOpenWorldWarnings(question),
     ...assignedOptionWarnings(question, assignment),
   ];
   if (!sameLemma(question.wordTested, assignment.target.word)) {
     warnings.push(`wordTested must match assigned target "${assignment.target.word}"`);
   }
   return Array.from(new Set(warnings));
+}
+
+function vocabularyRepairReasonsFor(
+  question: ExamQuestion,
+  assignment: VocabularyQuestionAssignment,
+): string[] {
+  const { hard } = splitValidationErrors(validateQuestion(question, "vocab"));
+  const reasons = [
+    ...hard,
+    ...deterministicOpenWorldWarnings(question),
+    ...assignedOptionWarnings(question, assignment),
+  ];
+  if (!sameLemma(question.wordTested, assignment.target.word)) {
+    reasons.push(`wordTested must match assigned target "${assignment.target.word}"`);
+  }
+  return Array.from(new Set(reasons));
 }
 
 async function buildVocabularySection(
@@ -1531,7 +1549,7 @@ async function buildVocabularySection(
 
   // Fast-quality pipeline:
   // 1 model call: generate all 10 items.
-  // 0-1 model call: repair items rejected by item or suite-wide validation.
+  // 0-1 model call: repair structural or server-allocation failures only.
   // No whole-set retry and no per-item morphology calls.
   const questions = await generateVocabularyDraft(assignments, selectedLevel);
   if (questions.length !== targetWords.length) {
@@ -1539,7 +1557,7 @@ async function buildVocabularySection(
   }
 
   const itemFailureIndexes = questions
-    .map((question, index) => vocabularyWarningsFor(question, assignments[index]).length ? index : -1)
+    .map((question, index) => vocabularyRepairReasonsFor(question, assignments[index]).length ? index : -1)
     .filter((index) => index >= 0);
   const failedIndexes = Array.from(new Set([
     ...itemFailureIndexes,
@@ -1684,6 +1702,20 @@ async function repairReadingPassage(
   };
 }
 
+function readingStructuralRepairErrors(passage: ReadingPassage): string[] {
+  const errors: string[] = [];
+  if (!passage.title) errors.push("missing passage title");
+  if (!passage.passage) errors.push("missing passage text");
+  if (passage.questions.length !== 4) {
+    errors.push("the passage must have exactly four questions");
+  }
+  passage.questions.forEach((question, index) => {
+    const { hard } = splitValidationErrors(validateQuestion(question, "reading"));
+    hard.forEach((error) => errors.push(`Q${index + 1}: ${error}`));
+  });
+  return errors;
+}
+
 async function buildReadingSection(
   level: string,
   selectedLevel: number | string,
@@ -1692,11 +1724,9 @@ async function buildReadingSection(
   // Bounded pipeline: one draft call and at most one targeted repair call.
   const plan = planReadingPassageLocally(level, vocabList);
   const draft = await generateReadingDraft(level, selectedLevel, plan);
-  const draftErrors = [
-    ...validatePassage(draft),
-    ...missingRequiredReadingWords(draft.passage, plan.requiredWords)
-      .map((word) => `required vocabulary is missing from the passage: ${word}`),
-  ];
+  // Only structural defects justify another model call. Passage length,
+  // vocabulary coverage, and other editorial concerns remain review warnings.
+  const draftErrors = readingStructuralRepairErrors(draft);
 
   let passage: ReadingPassage = draft;
   if (draftErrors.length > 0) {
@@ -1899,7 +1929,7 @@ app.post("/api/generate", async (req, res) => {
         itemLevelWarningsAreNonBlocking: true,
 
         // Item Generation Engine diagnostics.
-        engineVersion: "5.3.0-sequential-single-repair",
+        engineVersion: "5.3.2-deterministic-open-world-guard",
         pipeline: [
           "vocabulary-first",
           "complete-range-vocabulary-shuffle",
@@ -1909,6 +1939,8 @@ app.post("/api/generate", async (req, res) => {
           "normalize",
           "deterministic-validate",
           "deterministic-failed-item-detection",
+          "structural-versus-editorial-triage",
+          "deterministic-open-world-validation",
           "lenient-incomplete-option-capture",
           "vocabulary-at-most-one-targeted-repair",
           "suite-wide-option-uniqueness-check",
@@ -1922,6 +1954,7 @@ app.post("/api/generate", async (req, res) => {
           "final-qa",
         ],
         itemLevelRepairEnabled: true,
+        repairPolicy: "structural-server-allocation-and-deterministic-open-world-errors",
         independentEditorialReviewCompleted: true,
         manualReviewEnabled: true,
         reviewWarnings: collectReviewWarnings(finalData),
