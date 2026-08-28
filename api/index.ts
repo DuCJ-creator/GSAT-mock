@@ -236,6 +236,11 @@ type VocabularyInput = {
   meaning?: string;
 };
 
+type VocabularyQuestionAssignment = {
+  target: VocabularyInput;
+  distractors: VocabularyInput[];
+};
+
 type ExamQuestion = {
   id?: string;
   question: string;
@@ -736,11 +741,11 @@ NON-NEGOTIABLE ITEM RULES
 5. The sentence must have one and only one defensible answer. It is not a "best answer" question.
 6. Add a semantic lock: definition, cause, consequence, contrast, purpose, chronology, quantity, factual detail, or fixed collocation that excludes all distractors.
 7. The stem must contain enough context for an independent reader to prove the answer from the sentence itself. Never rely on unknown personal facts or generic real-world possibilities.
-8. Before returning, insert every option into the blank. If more than one option can fit, rewrite the stem with a stronger clue or replace the distractor.
+8. Before returning, insert every option into the blank. If more than one option can fit, rewrite the stem with a stronger clue. When server option assignments are supplied, never replace an assigned distractor.
 9. The explanation must quote or accurately paraphrase the exact clue that forces the answer. It must not invent any fact not present in the stem.
 7. Avoid generic frames where many adjectives or verbs could fit, such as "The athlete's ___ performance impressed everyone."
 8. Distractors may look plausible at first glance but must become clearly wrong in the exact sentence because of meaning, grammar, collocation, logic, or register.
-9. Silently insert all four options into the sentence. If a competent English teacher could defend a distractor, rewrite the sentence or replace it.
+9. Silently insert all four options into the sentence. If a competent English teacher could defend a distractor, rewrite the sentence; preserve every server-assigned option lexeme.
 10. Use natural standard English with correct agreement, tense, number, articles, prepositions, and punctuation.
 10a. Every displayed option must be in the exact grammatical form required by the blank. Determine the grammatical slot BEFORE choosing the surface form.
 10b. For emotion/causative participles, distinguish experiencer from cause: a person who feels the emotion normally takes the -ed form (She felt embarrassed); a thing, event, or situation that causes the emotion normally takes the -ing form (an embarrassing situation). Do not mechanically convert every target to -ed.
@@ -749,7 +754,7 @@ NON-NEGOTIABLE ITEM RULES
 11. Return options in A-B-C-D order, each prefixed (A), (B), (C), (D). correctAnswer is one bare letter.
 12. The Traditional Chinese explanation must identify why the keyed answer is required and why EACH distractor is impossible in this exact context.
 13. Never say another option is possible but less suitable. Never use language such as 最佳、較貼切、更適合、雖然也可以.
-14. Within one ten-question vocabulary set, do not reuse any lexical item as an option when the supplied vocabulary range contains enough distinct words. Ordinary inflections count as the same lexical item for this rule (sound/sounds, study/studied).
+14. When the server supplies an option allocation, it is authoritative: use exactly the assigned target and three assigned distractors for each question. Do not select substitute words from the source list. Across the set, ordinary inflections count as the same lexical item (sound/sounds, study/studied).
 15. Do not design answer-letter patterns. The server will move the actual correct option safely after review.`;
 
 const VOCAB_REVIEWER_SYSTEM = `You are the final senior editor of a Taiwan GSAT vocabulary item bank.
@@ -994,6 +999,84 @@ function selectTargetVocabulary(vocabList: VocabularyInput[], count: number): Vo
   return selected;
 }
 
+function vocabularyPosKey(pos: unknown): string {
+  const value = String(pos ?? "").trim().toLowerCase();
+  if (!value) return "";
+  if (/^(?:n|noun)\b/.test(value)) return "noun";
+  if (/^(?:v|verb)\b/.test(value)) return "verb";
+  if (/^(?:adj|adjective)\b/.test(value)) return "adjective";
+  if (/^(?:adv|adverb)\b/.test(value)) return "adverb";
+  if (/^(?:prep|preposition)\b/.test(value)) return "preposition";
+  if (/^(?:conj|conjunction)\b/.test(value)) return "conjunction";
+  return value.split(/[\s,;/]+/)[0];
+}
+
+/**
+ * The server, rather than the language model, chooses every option lexeme.
+ * With a 140-word source and 10 questions this produces 40 globally distinct
+ * choices sampled from the complete source range: 10 targets + 30 distractors.
+ */
+function allocateVocabularyAssignments(
+  targetWords: VocabularyInput[],
+  vocabList: VocabularyInput[],
+): VocabularyQuestionAssignment[] {
+  const uniqueVocab = Array.from(
+    new Map(
+      vocabList.map((item) => [optionLexemeKey(item.word), item] as const),
+    ).values(),
+  ).filter((item) => optionLexemeKey(item.word));
+
+  const targetKeys = new Set(targetWords.map((item) => optionLexemeKey(item.word)));
+  const unusedPool = shuffle(
+    uniqueVocab.filter((item) => !targetKeys.has(optionLexemeKey(item.word))),
+  );
+  const fallbackPool = shuffle(uniqueVocab);
+  const globallyUsed = new Set(targetKeys);
+
+  return targetWords.map((target) => {
+    const distractors: VocabularyInput[] = [];
+    const localKeys = new Set([optionLexemeKey(target.word)]);
+    const targetPos = vocabularyPosKey(target.pos);
+
+    while (distractors.length < 3 && unusedPool.length > 0) {
+      const matchingPosIndex = targetPos
+        ? unusedPool.findIndex((item) => vocabularyPosKey(item.pos) === targetPos)
+        : -1;
+      const candidate = unusedPool.splice(matchingPosIndex >= 0 ? matchingPosIndex : 0, 1)[0];
+      const key = optionLexemeKey(candidate.word);
+      if (!key || localKeys.has(key) || globallyUsed.has(key)) continue;
+      distractors.push(candidate);
+      localKeys.add(key);
+      globallyUsed.add(key);
+    }
+
+    // Reuse is allowed only when the unique source range is genuinely too
+    // small to fill all option slots. Even then, never duplicate within a question.
+    if (distractors.length < 3) {
+      const orderedFallback = targetPos
+        ? [...fallbackPool].sort((a, b) =>
+            Number(vocabularyPosKey(b.pos) === targetPos) - Number(vocabularyPosKey(a.pos) === targetPos),
+          )
+        : fallbackPool;
+      for (const candidate of orderedFallback) {
+        const key = optionLexemeKey(candidate.word);
+        if (!key || localKeys.has(key)) continue;
+        distractors.push(candidate);
+        localKeys.add(key);
+        if (distractors.length === 3) break;
+      }
+    }
+
+    if (distractors.length !== 3) {
+      throw new Error(
+        `The vocabulary range cannot provide three distinct distractors for target "${target.word}".`,
+      );
+    }
+
+    return { target, distractors };
+  });
+}
+
 function sameLemma(a: unknown, b: unknown): boolean {
   return String(a ?? "").trim().toLocaleLowerCase() === String(b ?? "").trim().toLocaleLowerCase();
 }
@@ -1079,6 +1162,45 @@ function uniqueVocabularyOptionCount(vocabList: VocabularyInput[]): number {
   return new Set(vocabList.map((item) => optionLexemeKey(item.word)).filter(Boolean)).size;
 }
 
+function assignedOptionWarnings(
+  question: ExamQuestion,
+  assignment: VocabularyQuestionAssignment,
+): string[] {
+  const expected = [assignment.target, ...assignment.distractors]
+    .map((item) => optionLexemeKey(item.word));
+  const actual = question.options.map(optionLexemeKey);
+  const warnings: string[] = [];
+
+  for (const item of [assignment.target, ...assignment.distractors]) {
+    const key = optionLexemeKey(item.word);
+    if (key && !actual.includes(key)) {
+      warnings.push(`missing server-assigned option lexeme "${item.word}"`);
+    }
+  }
+  for (const option of question.options) {
+    const key = optionLexemeKey(option);
+    if (key && !expected.includes(key)) {
+      warnings.push(`unassigned option lexeme "${stripOptionLabel(option)}"`);
+    }
+  }
+
+  const answerIndex = LETTERS.indexOf(question.correctAnswer);
+  const keyedAnswer = actual[answerIndex] || "";
+  if (keyedAnswer !== optionLexemeKey(assignment.target.word)) {
+    warnings.push(`the keyed answer must be the assigned target "${assignment.target.word}"`);
+  }
+
+  return Array.from(new Set(warnings));
+}
+
+function formatVocabularyAssignments(assignments: VocabularyQuestionAssignment[]): string {
+  return assignments.map((assignment, index) => ({
+    question: index + 1,
+    target: assignment.target,
+    requiredDistractors: assignment.distractors,
+  })).map((item) => JSON.stringify(item)).join("\n");
+}
+
 function formatForbiddenOptions(questions: ExamQuestion[]): string {
   const items = questions.flatMap((question) => question.options.map(stripOptionLabel));
   return items.length ? items.map((item) => `- ${item}`).join("\n") : "(none)";
@@ -1099,29 +1221,23 @@ function formatVocabularyList(vocabList: VocabularyInput[]): string {
 // -----------------------------------------------------------------------------
 
 async function generateVocabularyDraft(
-  targetWords: VocabularyInput[],
-  vocabList: VocabularyInput[],
+  assignments: VocabularyQuestionAssignment[],
   selectedLevel: number | string,
 ): Promise<ExamQuestion[]> {
-  const targetAssignments = targetWords
-    .map((item, index) => `${index + 1}. Question ${index + 1} MUST test: ${item.word}${item.pos ? ` (${item.pos})` : ""}${item.meaning ? ` — ${item.meaning}` : ""}`)
-    .join("\n");
+  const userPrompt = `Create exactly ${assignments.length} GSAT vocabulary questions for Level ${selectedLevel || "mixed"}.
+The server has already shuffled and searched the COMPLETE uploaded vocabulary range, then allocated all forty option lexemes. You are not allowed to choose easier alternatives.
 
-  const userPrompt = `Create exactly ${targetWords.length} GSAT vocabulary questions for Level ${selectedLevel || "mixed"}.
-The target words below were sampled randomly by the server from the ENTIRE supplied range.
-Follow the assignment exactly: Question N must test the target listed for Question N.
-Do not replace a target with an earlier or easier word from the list.
-The displayed correct option may use a grammatically necessary inflection, but wordTested must remain the assigned dictionary entry.
-Distractors should preferably come from the full supplied range, and every option set must contain four distinct lexical items.
-SUITE-WIDE UNIQUENESS: across all ${targetWords.length} questions, do not reuse an option word or the same lexeme in another inflected form when the supplied list has enough distinct vocabulary. For example, if "sound" or "sounds" appears anywhere, neither may appear again in this set.
+For Question N:
+- Test the assigned target and keep it in wordTested.
+- Use the target plus the three required distractors as the ONLY four option lexemes.
+- You may apply a grammatically necessary inflection to a displayed option, but must not replace its lexeme.
+- The keyed correct option must be the assigned target.
+- Rewrite the sentence as needed so the target is uniquely correct and all three assigned distractors are clearly wrong.
 
-MANDATORY TARGET ASSIGNMENTS
-${targetAssignments}
+MANDATORY SERVER OPTION ALLOCATION
+${formatVocabularyAssignments(assignments)}
 
-FULL VOCABULARY RANGE FOR DISTRACTORS
-${formatVocabularyList(vocabList)}
-
-Return {"vocabQuestions":[...]} with exactly ${targetWords.length} items in the same order as the assignments. Every item MUST use these exact keys: question, options, correctAnswer, explanation, wordTested, answerText. The question field must contain the complete sentence with _____. The explanation field must be Traditional Chinese.`;
+Return {"vocabQuestions":[...]} with exactly ${assignments.length} items in the same order as the assignments. Every item MUST use these exact keys: question, options, correctAnswer, explanation, wordTested, answerText. The question field must contain the complete sentence with _____. The explanation field must be Traditional Chinese.`;
 
   const raw = await callJsonModel<any>(
     VOCAB_WRITER_SYSTEM,
@@ -1131,7 +1247,7 @@ Return {"vocabQuestions":[...]} with exactly ${targetWords.length} items in the 
   );
 
   const items = Array.isArray(raw?.vocabQuestions) ? raw.vocabQuestions : [];
-  return items.slice(0, targetWords.length).map((item: any) => normalizeQuestion(item, "vocab"));
+  return items.slice(0, assignments.length).map((item: any) => normalizeQuestion(item, "vocab"));
 }
 
 const VOCAB_BATCH_REVIEWER_SYSTEM = `You are the final senior editor of a Taiwan GSAT vocabulary item bank.
@@ -1147,33 +1263,26 @@ MANDATORY RULES
 4. Exactly one option must be defensible from explicit context in the sentence. Add a semantic lock when needed.
 5. Reject open-world location items such as "The cat is hiding ___ the box" unless the stem contains a clue that excludes all other locations.
 6. Correct grammar and morphology, including infinitive/base form, agreement, tense, voice, number, adjective/adverb form, and -ed/-ing participles.
-7. Keep wordTested as the assigned lemma and set answerText to the exact keyed option text.
+7. Keep wordTested as the assigned target lemma and set answerText to the exact keyed option text.
 8. Explanations must be Traditional Chinese, cite the exact clue, and explain why all distractors fail.
 9. Do not reuse malformed or truncated words.
-10. Across the complete set, never reuse an option word or an ordinary inflection of the same lexeme while unused words remain in the supplied vocabulary range. Correct answers and distractors both count. Repeated options are allowed only after the available vocabulary has genuinely been exhausted.
+10. Every question has four server-assigned option lexemes: one target and three required distractors. Preserve all four. Never invent, substitute, borrow, or reuse another lexeme.
 11. Keep exactly ten items and return {"vocabQuestions":[...]}.`;
 
 async function reviewVocabularyBatch(
   questions: ExamQuestion[],
-  targetWords: VocabularyInput[],
-  vocabList: VocabularyInput[],
+  assignments: VocabularyQuestionAssignment[],
   selectedLevel: number | string,
 ): Promise<ExamQuestion[]> {
-  const assignments = targetWords.map((item, index) => ({
-    index,
-    word: item.word,
-    pos: item.pos,
-    meaning: item.meaning,
-  }));
   const raw = await callJsonModel<any>(
     VOCAB_BATCH_REVIEWER_SYSTEM,
-    `Repair this Level ${selectedLevel || "mixed"} ten-question set in one pass.\nTARGET ASSIGNMENTS:\n${JSON.stringify(assignments)}\n\nFULL VOCABULARY RANGE (use unused entries before repeating any option):\n${formatVocabularyList(vocabList)}\n\nDETECTED CROSS-QUESTION DUPLICATES:\n${suiteDuplicateOptions(questions).join("\n") || "none"}\n\nDRAFT SET:\n${JSON.stringify({ vocabQuestions: questions })}`,
+    `Repair this Level ${selectedLevel || "mixed"} ten-question set in one pass.\n\nMANDATORY SERVER OPTION ALLOCATION:\n${formatVocabularyAssignments(assignments)}\n\nEach repaired question must use exactly its allocated target and three allocated distractors. Rewrite the stem and explanation around those fixed lexemes; do not replace an allocated lexeme.\n\nDETECTED CROSS-QUESTION DUPLICATES:\n${suiteDuplicateOptions(questions).join("\n") || "none"}\n\nDRAFT SET:\n${JSON.stringify({ vocabQuestions: questions })}`,
     vocabBatchSchema,
     0.05,
   );
   const items = Array.isArray(raw?.vocabQuestions) ? raw.vocabQuestions : [];
-  if (items.length !== targetWords.length) {
-    throw new Error(`Batch reviewer returned ${items.length} items; expected ${targetWords.length}.`);
+  if (items.length !== assignments.length) {
+    throw new Error(`Batch reviewer returned ${items.length} items; expected ${assignments.length}.`);
   }
   return items.map((item: any) => normalizeQuestion(item, "vocab"));
 }
@@ -1314,27 +1423,27 @@ You will receive only failed items. For every supplied item:
 7. correctAnswer must be one bare letter A, B, C, or D; answerText must exactly match that option.
 8. explanation must be detailed Traditional Chinese and must identify the forcing clue and reject every distractor.
 9. Never omit a field. Never return placeholders. Never turn the item into an open question.
-10. Across all supplied items, do not reuse an option lexeme. Also do not use a lexeme listed as reserved by an unchanged item. Ordinary inflections count as the same lexeme.
-11. Reuse is permitted only if the supplied vocabulary range has no unused lexical item left.
+10. Each supplied item includes a server-assigned target and three server-assigned distractors. Use exactly those four lexemes and no others.
+11. Rewrite the sentence and explanation around the fixed allocated lexemes; never replace an allocated distractor merely because another word is easier.
 12. Do not return items that were not supplied.`;
 
 async function repairVocabularyBatch(
   questions: ExamQuestion[],
   failedIndexes: number[],
-  targetWords: VocabularyInput[],
-  vocabList: VocabularyInput[],
+  assignments: VocabularyQuestionAssignment[],
   selectedLevel: number | string,
 ): Promise<Map<number, ExamQuestion>> {
   if (failedIndexes.length === 0) return new Map();
 
   const failedItems = failedIndexes.map((index) => ({
     index,
-    targetWord: targetWords[index],
+    serverAssignment: assignments[index],
     problems: [
       ...validateQuestion(questions[index], "vocab"),
       ...deterministicVocabularyWarnings(questions[index]),
-      ...(!sameLemma(questions[index].wordTested, targetWords[index].word)
-        ? [`wordTested must match assigned target "${targetWords[index].word}"`]
+      ...assignedOptionWarnings(questions[index], assignments[index]),
+      ...(!sameLemma(questions[index].wordTested, assignments[index].target.word)
+        ? [`wordTested must match assigned target "${assignments[index].target.word}"`]
         : []),
       ...suiteDuplicateOptions(questions)
         .filter((problem) => problem.startsWith(`Q${index + 1} `)),
@@ -1352,12 +1461,12 @@ Return exactly one repaired item for every supplied index, in the same order.
 Do not rewrite items that are not supplied.
 
 MANDATORY RULES
-- Preserve each assigned target dictionary entry in wordTested.
-- Keep a genuine one-sentence gap-filling item with exactly one visible blank: _____.
+- Preserve each server-assigned target dictionary entry in wordTested.
+- Keep a genuine one-sentence gap-filling item with exactly one visible blank: _____. 
 - Add an explicit semantic lock so only one option is defensible.
-- Use four different lexical items; all displayed forms must fit the grammatical slot.
-- Across every repaired item, do not repeat any option word or inflected form of the same lexeme.
-- Do not use any option lexeme reserved by an unchanged item. Choose unused entries from AVAILABLE VOCABULARY first.
+- Use exactly the assigned target and three assigned distractor lexemes for that item; all displayed forms must fit the grammatical slot.
+- Never substitute a different distractor. Rewrite the sentence if necessary to make the fixed allocation work.
+- Do not use any option lexeme reserved by an unchanged item.
 - Independently solve the repaired item and set correctAnswer and answerText correctly.
 - The Traditional Chinese explanation must identify the forcing clue and explain why all distractors fail.
 - Never use placeholders or open-ended question formats.
@@ -1368,8 +1477,8 @@ ${JSON.stringify(failedItems)}
 OPTIONS RESERVED BY UNCHANGED ITEMS
 ${reservedOptions.map((option) => `- ${option}`).join("\n") || "(none)"}
 
-AVAILABLE VOCABULARY
-${formatVocabularyList(vocabList)}
+MANDATORY SERVER OPTION ALLOCATION FOR FAILED ITEMS
+${failedIndexes.map((index) => JSON.stringify({ question: index + 1, ...assignments[index] })).join("\n")}
 
 Return JSON only in this exact shape:
 {"vocabQuestions":[repaired item 1, repaired item 2, ...]}
@@ -1397,14 +1506,15 @@ Every repaired item MUST include all six exact keys: question, options, correctA
 
 function vocabularyWarningsFor(
   question: ExamQuestion,
-  targetWord: VocabularyInput,
+  assignment: VocabularyQuestionAssignment,
 ): string[] {
   const warnings = [
     ...validateQuestion(question, "vocab"),
     ...deterministicVocabularyWarnings(question),
+    ...assignedOptionWarnings(question, assignment),
   ];
-  if (!sameLemma(question.wordTested, targetWord.word)) {
-    warnings.push(`wordTested must match assigned target "${targetWord.word}"`);
+  if (!sameLemma(question.wordTested, assignment.target.word)) {
+    warnings.push(`wordTested must match assigned target "${assignment.target.word}"`);
   }
   return Array.from(new Set(warnings));
 }
@@ -1417,19 +1527,20 @@ async function buildVocabularySection(
   if (targetWords.length === 0) {
     throw new Error("No vocabulary words are available for question generation.");
   }
+  const assignments = allocateVocabularyAssignments(targetWords, vocabList);
 
   // Fast-quality pipeline:
   // 1 model call: generate all 10 items.
   // 0-1 model call: repair items rejected by item or suite-wide validation.
   // 0-1 final whole-set call only when the distinct-option quota is still missed.
   // No per-item morphology calls.
-  const questions = await generateVocabularyDraft(targetWords, vocabList, selectedLevel);
+  const questions = await generateVocabularyDraft(assignments, selectedLevel);
   if (questions.length !== targetWords.length) {
     throw new Error(`Vocabulary draft returned ${questions.length} items; expected ${targetWords.length}.`);
   }
 
   const itemFailureIndexes = questions
-    .map((question, index) => vocabularyWarningsFor(question, targetWords[index]).length ? index : -1)
+    .map((question, index) => vocabularyWarningsFor(question, assignments[index]).length ? index : -1)
     .filter((index) => index >= 0);
   const failedIndexes = Array.from(new Set([
     ...itemFailureIndexes,
@@ -1442,8 +1553,7 @@ async function buildVocabularySection(
       const repairs = await repairVocabularyBatch(
         questions,
         failedIndexes,
-        targetWords,
-        vocabList,
+        assignments,
         selectedLevel,
       );
       merged = merged.map((question, index) => repairs.get(index) || question);
@@ -1462,10 +1572,13 @@ async function buildVocabularySection(
   const requiredUniqueOptions = Math.min(optionSlots, uniqueVocabularyOptionCount(vocabList));
   if (
     merged.some(hasIncompleteQuestionStructure) ||
+    merged.some((question, index) =>
+      assignedOptionWarnings(question, assignments[index]).length > 0,
+    ) ||
     usedOptionKeys(merged).size < requiredUniqueOptions
   ) {
     try {
-      merged = await reviewVocabularyBatch(merged, targetWords, vocabList, selectedLevel);
+      merged = await reviewVocabularyBatch(merged, assignments, selectedLevel);
     } catch (error) {
       // Uniqueness is an editorial preference, not a reason to discard an
       // otherwise usable paper. Keep the best available set and route any
@@ -1492,7 +1605,7 @@ async function buildVocabularySection(
     attachReviewMetadata(
       question,
       [
-        ...vocabularyWarningsFor(question, targetWords[index]),
+        ...vocabularyWarningsFor(question, assignments[index]),
         ...unresolvedDuplicates
           .filter((warning) => warning.startsWith(`Q${index + 1} `))
           .map((warning) =>
@@ -1833,9 +1946,12 @@ app.post("/api/generate", async (req, res) => {
         itemLevelWarningsAreNonBlocking: true,
 
         // Item Generation Engine diagnostics.
-        engineVersion: "5.1.2-incomplete-option-auto-repair",
+        engineVersion: "5.2.0-server-allocated-option-pool",
         pipeline: [
           "local-vocabulary-grounded-topic-planning",
+          "complete-range-vocabulary-shuffle",
+          "server-side-forty-lexeme-allocation",
+          "part-of-speech-aware-distractor-allocation",
           "generate",
           "normalize",
           "deterministic-validate",
@@ -1859,6 +1975,9 @@ app.post("/api/generate", async (req, res) => {
         answerPlacementMethod: "move-correct-option-then-derive-letter",
         answerPatternPolicy: "balanced-but-unpredictable",
         vocabAnswerDistribution: distribution(finalData.vocabQuestions || []),
+        vocabSourceUniqueLexemeCount: uniqueVocabularyOptionCount(cleanVocabList),
+        vocabGeneratedDistinctOptionLexemeCount: usedOptionKeys(finalData.vocabQuestions || []).size,
+        vocabGeneratedRepeatedOptions: suiteDuplicateOptions(finalData.vocabQuestions || []),
         vocabAnswerSequence: (finalData.vocabQuestions || [])
           .map((question) => question.correctAnswer)
           .join(""),
