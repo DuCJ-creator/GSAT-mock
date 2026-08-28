@@ -93,7 +93,22 @@ export default function WorksheetExport({ suite, onBack }: WorksheetExportProps)
   };
 
   const handlePrint = () => {
-    window.print();
+    // Some PostScript/PDF printer drivers rasterize SVG icons, gradients,
+    // shadows, and transparent layers into an image command they cannot decode.
+    // The temporary root class activates a text-and-border-only print profile.
+    const root = document.documentElement;
+    const cleanup = () => root.classList.remove("printer-safe-output");
+    root.classList.add("printer-safe-output");
+    window.addEventListener("afterprint", cleanup, { once: true });
+
+    // Give the browser two paint frames to apply the safe print stylesheet
+    // before it snapshots the document for PDF/printing.
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => window.print());
+    });
+
+    // Safari does not consistently fire afterprint when the dialog is closed.
+    window.setTimeout(cleanup, 60_000);
   };
 
   const handleDownloadTxt = () => {
