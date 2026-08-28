@@ -1532,8 +1532,7 @@ async function buildVocabularySection(
   // Fast-quality pipeline:
   // 1 model call: generate all 10 items.
   // 0-1 model call: repair items rejected by item or suite-wide validation.
-  // 0-1 final whole-set call only when the distinct-option quota is still missed.
-  // No per-item morphology calls.
+  // No whole-set retry and no per-item morphology calls.
   const questions = await generateVocabularyDraft(assignments, selectedLevel);
   if (questions.length !== targetWords.length) {
     throw new Error(`Vocabulary draft returned ${questions.length} items; expected ${targetWords.length}.`);
@@ -1563,33 +1562,9 @@ async function buildVocabularySection(
       console.warn("Failed-item vocabulary repair failed; keeping flagged drafts:", error);
     }
   }
-
-
-  // A prompt is guidance, not a guarantee. Re-check the complete set after the
-  // targeted repair. The required number of distinct choices is capped by the
-  // uploaded pool, so reuse becomes legal only after that pool is exhausted.
-  const optionSlots = merged.length * 4;
-  const requiredUniqueOptions = Math.min(optionSlots, uniqueVocabularyOptionCount(vocabList));
-  if (
-    merged.some(hasIncompleteQuestionStructure) ||
-    merged.some((question, index) =>
-      assignedOptionWarnings(question, assignments[index]).length > 0,
-    ) ||
-    usedOptionKeys(merged).size < requiredUniqueOptions
-  ) {
-    try {
-      merged = await reviewVocabularyBatch(merged, assignments, selectedLevel);
-    } catch (error) {
-      // Uniqueness is an editorial preference, not a reason to discard an
-      // otherwise usable paper. Keep the best available set and route any
-      // remaining repetition to the existing manual-review workflow.
-      console.warn("Whole-set vocabulary repair failed; keeping items for manual review:", error);
-    }
-  }
-
   // Missing choices cannot be represented as a usable multiple-choice item.
-  // Soft editorial issues remain nonblocking, but structural defects get two
-  // repair opportunities before the request asks the user to retry.
+  // Soft editorial issues remain nonblocking. Structural defects get the one
+  // targeted repair above; the server never starts a second whole-set AI pass.
   const incompleteIndexes = merged
     .map((question, index) => hasIncompleteQuestionStructure(question) ? index + 1 : -1)
     .filter((index) => index > 0);
@@ -1714,8 +1689,7 @@ async function buildReadingSection(
   selectedLevel: number | string,
   vocabList: VocabularyInput[],
 ): Promise<ReadingPassage> {
-  // Timeout-safe pipeline: local vocabulary selection, one draft call, one
-  // targeted repair, and a second call only for unresolved structural defects.
+  // Bounded pipeline: one draft call and at most one targeted repair call.
   const plan = planReadingPassageLocally(level, vocabList);
   const draft = await generateReadingDraft(level, selectedLevel, plan);
   const draftErrors = [
@@ -1731,25 +1705,6 @@ async function buildReadingSection(
     } catch (error) {
       console.warn("Reading targeted repair failed; keeping the complete draft with review warnings:", error);
       passage = draft;
-    }
-  }
-
-  const remainingReadingErrors = validatePassage(passage);
-  const needsStructuralReadingRetry =
-    !passage.title ||
-    !passage.passage ||
-    passage.questions.length !== 4 ||
-    passage.questions.some(hasIncompleteQuestionStructure);
-  if (needsStructuralReadingRetry) {
-    try {
-      passage = await repairReadingPassage(
-        passage,
-        remainingReadingErrors,
-        level,
-        plan,
-      );
-    } catch (error) {
-      console.warn("Reading structural retry failed:", error);
     }
   }
 
@@ -1915,17 +1870,15 @@ app.post("/api/generate", async (req, res) => {
 
     const data: ExamData = {};
 
-    // Vocabulary and reading are independent. Run them concurrently so selecting
-    // both does not make the serverless request wait for one full pipeline before
-    // starting the other.
-    const [vocabQuestions, readingPassage] = await Promise.all([
-      wantsVocab
-        ? buildVocabularySection(cleanVocabList, selectedLevel)
-        : Promise.resolve(undefined),
-      wantsReading
-        ? buildReadingSection(String(selectedReadingLevels[0]), selectedLevel, cleanVocabList)
-        : Promise.resolve(undefined),
-    ]);
+    // Deliberately sequential and deterministic: finish vocabulary first, then
+    // start reading only when requested. Each section performs one generation
+    // call and at most one targeted repair call.
+    const vocabQuestions = wantsVocab
+      ? await buildVocabularySection(cleanVocabList, selectedLevel)
+      : undefined;
+    const readingPassage = wantsReading
+      ? await buildReadingSection(String(selectedReadingLevels[0]), selectedLevel, cleanVocabList)
+      : undefined;
 
     if (vocabQuestions) data.vocabQuestions = vocabQuestions;
     if (readingPassage) data.readingPassages = [readingPassage];
@@ -1946,23 +1899,24 @@ app.post("/api/generate", async (req, res) => {
         itemLevelWarningsAreNonBlocking: true,
 
         // Item Generation Engine diagnostics.
-        engineVersion: "5.2.0-server-allocated-option-pool",
+        engineVersion: "5.3.0-sequential-single-repair",
         pipeline: [
-          "local-vocabulary-grounded-topic-planning",
+          "vocabulary-first",
           "complete-range-vocabulary-shuffle",
           "server-side-forty-lexeme-allocation",
           "part-of-speech-aware-distractor-allocation",
-          "generate",
+          "vocabulary-generate-once",
           "normalize",
           "deterministic-validate",
           "deterministic-failed-item-detection",
           "lenient-incomplete-option-capture",
-          "single-batch-targeted-repair",
-          "structural-repair-retry",
+          "vocabulary-at-most-one-targeted-repair",
           "suite-wide-option-uniqueness-check",
-          "whole-set-uniqueness-repair-if-needed",
           "nonblocking-manual-review-for-unresolved-repetition",
           "manual-review-for-unresolved-items",
+          "reading-second-if-requested",
+          "reading-generate-once",
+          "reading-at-most-one-targeted-repair",
           "move-correct-option",
           "balanced-unpredictable-placement",
           "final-qa",
